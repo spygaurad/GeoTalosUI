@@ -119,11 +119,28 @@ export const EP = {
     list: 'annotation-schemas',
     create: 'annotation-schemas',
     detail: (id: string) => `annotation-schemas/${id}`,
+    update: (id: string) => `annotation-schemas/${id}`,
+    delete: (id: string) => `annotation-schemas/${id}`,
     classes: (schemaId: string) => `annotation-schemas/${schemaId}/classes`,
     classDetail: (schemaId: string, classId: string) =>
       `annotation-schemas/${schemaId}/classes/${classId}`,
     classStyle: (schemaId: string, classId: string) =>
       `annotation-schemas/${schemaId}/classes/${classId}/style`,
+  },
+
+  // Standalone annotation classes (for direct get/update/delete)
+  annotationClasses: {
+    detail: (classId: string) => `annotation-classes/${classId}`,
+    update: (classId: string) => `annotation-classes/${classId}`,
+    delete: (classId: string) => `annotation-classes/${classId}`,
+  },
+
+  styles: {
+    list: 'styles',
+    create: 'styles',
+    detail: (styleId: string) => `styles/${styleId}`,
+    update: (styleId: string) => `styles/${styleId}`,
+    delete: (styleId: string) => `styles/${styleId}`,
   },
 
   labelSchemas: {

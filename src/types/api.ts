@@ -153,6 +153,8 @@ export interface AnnotationSchema {
   properties_schema: Record<string, unknown> | null;
   classes: AnnotationClass[];
   created_at: string;
+  updated_at: string;
+
 }
 
 export interface AnnotationClass {
