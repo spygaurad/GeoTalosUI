@@ -195,6 +195,9 @@ export default function LeafletMap() {
     setMapInstance(map);
     getMapManager().init(map);
 
+    // Set initial zoom so pointer visibility is correct before first zoomend
+    useMapLayersStore.getState().setCurrentZoom(zoom);
+
     // ── Tile layer ─────────────────────────────────────────
     const initialBasemapId = useMapStore.getState().activeBasemapId ?? 'osm';
     const initialBm = BASEMAPS[initialBasemapId] ?? BASEMAPS.osm;
@@ -402,8 +405,8 @@ export default function LeafletMap() {
       useMapStore.getState().setDrawnGeometry(null);
     };
 
-    // ── Close right panel when clicking on empty map ────────
-    const handleMapClick = () => {
+    // ── Close right panel when clicking on empty map, or select tile layer ──
+    const handleMapClick = (e: L.LeafletMouseEvent) => {
       if (!mounted) return;
       if (justCreatedShapeRef.current) return;
       if (wasFeatureJustClicked()) return;
@@ -411,6 +414,16 @@ export default function LeafletMap() {
       // handles those clicks independently and the panel must stay open.
       if (useMapLayersStore.getState().measurementActive) return;
       deselectAllDrawnLayers(); // hide delete button when deselecting
+
+      // Check if click is within a tile layer's bounds — select it
+      const mm = getMapManager();
+      const hitLayerId = mm.findTileLayerAtPoint(e.latlng);
+      if (hitLayerId) {
+        markFeatureClick(); // prevent map click from also closing panel
+        useMapLayersStore.getState().layerOnMapClick(hitLayerId);
+        return;
+      }
+
       if (useMapLayersStore.getState().rightPanelMode !== 'none') {
         useMapLayersStore.getState().closeRightPanel();
       }

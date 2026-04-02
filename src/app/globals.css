@@ -303,3 +303,51 @@ input[type='range']:active::-webkit-slider-thumb {
     transform: scale(1.1);
   }
 }
+
+/* ── ReactFlow — golden brown theme override ─────────────────────────────── */
+
+.react-flow__controls {
+  background: #fefcf9;
+  border: 1px solid #d4c0a8;
+  border-radius: 8px;
+  box-shadow: 0 2px 8px rgba(46, 52, 40, 0.08);
+}
+.react-flow__controls-button {
+  background: #fefcf9;
+  border-bottom: 1px solid #ede0d4;
+  fill: #7f5539;
+  color: #7f5539;
+}
+.react-flow__controls-button:hover {
+  background: #ede0d4;
+}
+.react-flow__edge-path {
+  stroke: #c4985c;
+  stroke-width: 1.5;
+}
+.react-flow__edge.selected .react-flow__edge-path {
+  stroke: #7f5539;
+  stroke-width: 2;
+}
+.react-flow__connection-line {
+  stroke: #c4985c;
+  stroke-width: 1.5;
+}
+.react-flow__minimap {
+  background: #f5ede0;
+  border: 1px solid #d4c0a8;
+  border-radius: 8px;
+}
+.react-flow__selection {
+  background: rgba(127, 85, 57, 0.08);
+  border: 1px dashed #c4985c;
+}
+.react-flow__handle {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  box-shadow: none !important;
+}
+.react-flow__handle:hover {
+  filter: brightness(1.2);
+}

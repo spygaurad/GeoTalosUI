@@ -13,6 +13,7 @@ import type { DrawTool, BasemapId } from '@/stores/mapStore';
 import { mapsApi } from '@/lib/api/maps';
 import { datasetsApi } from '@/lib/api/datasets';
 import { qk } from '@/lib/query-keys';
+import { geometryToTileBounds } from '@/lib/geo';
 
 import { useMapContext } from '@/features/maps/hooks/useMapContext';
 import { useMeasureTool } from '@/features/maps/hooks/useMeasureTool';
@@ -29,6 +30,7 @@ import { LeftPanel } from './LeftPanel/LeftPanel';
 import { RightPanel } from './RightPanel/RightPanel';
 import { LibraryPanel } from './LibraryPanel';
 import { ScaleBar } from '@/components/map/ScaleBar';
+import { TimelinePanel } from './TimelinePanel';
 
 // ─── Leaflet components — always ssr: false ────────────────────────────────────
 const LeafletMap = dynamic(() => import('@/components/map/LeafletMap'), {
@@ -87,6 +89,30 @@ export function MapEditorShell({ workspaceId, projectId, mapId }: MapEditorShell
   const setLayerVisible = useMapLayersStore((s) => s.setLayerVisible);
   const setLayerOpacity = useMapLayersStore((s) => s.setLayerOpacity);
 
+  // ── Timeline — fetch items when timeline opens for a dataset ──
+  const timelineEnabled = useMapLayersStore((s) => s.timelineEnabled);
+  const timelineDatasetId = useMapLayersStore((s) => s.timelineDatasetId);
+
+  const { data: timelineItemsData } = useQuery({
+    queryKey: qk.datasets.items(timelineDatasetId ?? ''),
+    queryFn: () => datasetsApi.listItems(timelineDatasetId!, { page_size: 500 }),
+    enabled: !!timelineDatasetId,
+  });
+
+  useEffect(() => {
+    if (timelineItemsData?.items) {
+      useMapLayersStore.getState().setTimelineItems(timelineItemsData.items);
+    }
+  }, [timelineItemsData]);
+
+  // ── Reset layer store when switching maps ──────────────────
+  const resetForMap = useMapLayersStore((s) => s.resetForMap);
+  useEffect(() => {
+    resetForMap();
+    return () => { resetForMap(); };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mapId]);
+
   // ── Restore view_state from map data ──────────────────────
   const viewStateRestoredRef = useRef(false);
 
@@ -122,20 +148,54 @@ export function MapEditorShell({ workspaceId, projectId, mapId }: MapEditorShell
   useEffect(() => {
     if (!mapData?.layers?.length) return;
 
+    const currentLayers = useMapLayersStore.getState().layers;
+    
     mapData.layers
       .sort((a, b) => a.z_index - b.z_index)
       .forEach((bl) => {
-        const layerId = bl.dataset_id ?? bl.stac_item_id ?? bl.id;
+        // Handle annotation_set layers differently
+        if (bl.source_type === 'annotation_set' && bl.annotation_set_id) {
+          const layerId = `annset-${bl.annotation_set_id}`;
+          
+          // Skip if layer already exists in store (prevents re-adding deleted layers)
+          if (currentLayers[layerId]) return;
+          
+          setBackendLayerId(layerId, bl.id);
+          initLayer(layerId, 'annotation', {
+            name: bl.name,
+            sourceType: 'annotation_set',
+            annotationSetId: bl.annotation_set_id,
+            zIndex: bl.z_index,
+          });
+          if (!bl.visible) setLayerVisible(layerId, false);
+          if (bl.opacity !== 1) setLayerOpacity(layerId, bl.opacity);
+          return;
+        }
+
+        // Layer ID convention: dataset layers use dataset_id, item layers use item-{stac_item_id}
+        const layerId = bl.source_type === 'stac_item' && bl.stac_item_id
+          ? `item-${bl.stac_item_id}`
+          : bl.dataset_id ?? bl.id;
         if (!layerId) return;
+
+        // Skip if layer already exists in store (prevents re-adding deleted layers)
+        if (currentLayers[layerId]) return;
 
         // Store the backend layer ID for PATCH/DELETE
         setBackendLayerId(layerId, bl.id);
 
         // Init with proper source type and z_index
+        // For stac_item layers, dataset_id is stored in source_config (not top-level)
+        const parentDatasetId = bl.dataset_id
+          ?? (bl.source_config?.dataset_id as string | undefined)
+          ?? undefined;
+
         initLayer(layerId, 'dataset', {
+          name: bl.name,
           sourceType: bl.source_type,
           zIndex: bl.z_index,
           tileServiceUrl: bl.tile_service_url ?? undefined,
+          parentDatasetId,
           stacItemId: bl.stac_item_id ?? undefined,
         });
 
@@ -144,28 +204,205 @@ export function MapEditorShell({ workspaceId, projectId, mapId }: MapEditorShell
         if (bl.opacity !== 1) setLayerOpacity(layerId, bl.opacity);
 
         // Fetch tiles based on source_type
+        // Dataset (collection) layers are group containers — no tiles.
+        // Only stac_item layers get tile rendering via TiTiler.
         if (bl.source_type === 'dataset' && bl.dataset_id) {
-          datasetsApi.getTileJson(bl.dataset_id).then((tj) => {
-            if (tj.tiles[0]) {
-              setLayerTileConfig(layerId, {
-                tileUrl: tj.tiles[0],
-                tileBounds: tj.bounds,
-                tileMinZoom: tj.minzoom,
-                tileMaxZoom: tj.maxzoom,
-              });
+          // Store rendering_config from dataset metadata for child items
+          const ds = datasets?.find((d) => d.id === bl.dataset_id);
+          const rc = ds?.metadata?.rendering_config;
+          if (rc) {
+            useMapLayersStore.getState().setLayerRenderingConfig(layerId, rc);
+          }
+        } else if (bl.source_type === 'stac_item' && bl.stac_item_id) {
+          // dataset_id is cached in source_config when the layer was created
+          let dsId = parentDatasetId;
+          const stacId = bl.stac_item_id;
+          
+          // Async IIFE to handle the restore flow with proper backfill
+          (async () => {
+            try {
+              // If we don't have dataset_id, try to get it from the tile config response
+              if (!dsId) {
+                // For old layers without source_config.dataset_id, we'll fetch tile config
+                // which returns dataset_id, allowing us to backfill parentDatasetId
+                // First, try searching datasets to find which one has this item
+                const dsMatch = datasets?.find((d) => 
+                  d.id && d.status === 'ready' // Only check ready datasets
+                );
+                // If still no match, the layer won't have bounds but tiles may still work
+                // if the stac_item_id is resolvable globally (unlikely without dataset context)
+              }
+              
+              if (!dsId) return; // Can't proceed without dataset_id
+              
+              // Fetch tile config
+              const cfg = await datasetsApi.getItemTileConfigByStacId(dsId, stacId);
+              
+              // If tile config returns a different dataset_id than we expected, use it
+              // and backfill parentDatasetId for future queries
+              if (cfg.dataset_id && cfg.dataset_id !== dsId) {
+                dsId = cfg.dataset_id;
+                useMapLayersStore.getState().setLayerParentDatasetId(layerId, dsId);
+              } else if (!parentDatasetId && cfg.dataset_id) {
+                // Backfill parentDatasetId for old layers
+                useMapLayersStore.getState().setLayerParentDatasetId(layerId, cfg.dataset_id);
+              }
+              
+              // Try to find the item to get geometry for tileBounds
+              let tileBounds: [number, number, number, number] | null = null;
+              try {
+                const itemsResp = await datasetsApi.listItems(dsId, { page_size: 500 });
+                const item = itemsResp.items?.find((i) => i.stac_item_id === stacId);
+                if (item?.geometry) {
+                  tileBounds = geometryToTileBounds(item.geometry);
+                }
+              } catch {
+                // Items fetch failed — proceed without bounds
+              }
+              
+              // Apply rendering parameters to tile URL
+              // For multi-band rasters (3+ bands), prefer RGB rendering over grayscale presets
+              let tileUrl = cfg.tile_url_template;
+              let activePreset: string | null = null;
+              const rc = cfg.rendering_config;
+              const hasBands = rc?.bands && rc.bands.length >= 3;
+              
+              // Helper: check if a preset is RGB (has 3 bands in asset_bidx)
+              const isRgbPreset = (presetParams?: Record<string, string>) => {
+                if (!presetParams?.asset_bidx) return false;
+                const match = presetParams.asset_bidx.match(/\|(\d+),(\d+),(\d+)/);
+                return !!match;
+              };
+              
+              // For multi-band rasters, find an RGB preset or use default RGB bands
+              if (hasBands && rc) {
+                // First, try to find an RGB preset (prefer one named "RGB", "True Color", etc.)
+                let rgbPresetId: string | null = null;
+                if (rc.presets) {
+                  // Look for preset with RGB in name first
+                  for (const [id, preset] of Object.entries(rc.presets)) {
+                    if (isRgbPreset(preset.params)) {
+                      if (/rgb|true.?color|natural/i.test(preset.label || id)) {
+                        rgbPresetId = id;
+                        break;
+                      }
+                      // Store first RGB preset as fallback
+                      if (!rgbPresetId) rgbPresetId = id;
+                    }
+                  }
+                }
+                
+                if (rgbPresetId && rc.presets) {
+                  // Apply found RGB preset
+                  const presetConfig = rc.presets[rgbPresetId];
+                  if (presetConfig?.params) {
+                    const params = new URLSearchParams();
+                    Object.entries(presetConfig.params).forEach(([key, value]) => {
+                      if (value) params.set(key, String(value));
+                    });
+                    tileUrl = `${cfg.tile_url_template}?${params.toString()}`;
+                    activePreset = rgbPresetId;
+                  }
+                } else {
+                  // No RGB preset found - apply default RGB band selection
+                  const bands = rc.bands;
+                  const r = bands[0]?.index ?? 1;
+                  const g = bands[1]?.index ?? 2;
+                  const b = bands[2]?.index ?? 3;
+                  const assetBidx = `data|${r},${g},${b}`;
+                  
+                  // Build rescale from band statistics
+                  const p2Vals = [bands[0]?.stats?.p2, bands[1]?.stats?.p2, bands[2]?.stats?.p2].filter(v => v != null) as number[];
+                  const p98Vals = [bands[0]?.stats?.p98, bands[1]?.stats?.p98, bands[2]?.stats?.p98].filter(v => v != null) as number[];
+                  
+                  const params = new URLSearchParams();
+                  params.set('asset_bidx', assetBidx);
+                  if (p2Vals.length === 3 && p98Vals.length === 3) {
+                    const rescale = `${Math.round(Math.min(...p2Vals))},${Math.round(Math.max(...p98Vals))}`;
+                    params.set('rescale', rescale);
+                  }
+                  tileUrl = `${cfg.tile_url_template}?${params.toString()}`;
+                  
+                  // Set band selection in store so UI reflects the applied bands
+                  useMapLayersStore.getState().setLayerBandSelection(layerId, { r, g, b }, null);
+                }
+              } else if (rc?.default_preset && rc.presets) {
+                // Single-band or no bands - use default preset
+                const defaultPreset = rc.default_preset;
+                const presetConfig = rc.presets[defaultPreset];
+                if (presetConfig?.params) {
+                  const params = new URLSearchParams();
+                  Object.entries(presetConfig.params).forEach(([key, value]) => {
+                    if (value) params.set(key, String(value));
+                  });
+                  tileUrl = `${cfg.tile_url_template}?${params.toString()}`;
+                  activePreset = defaultPreset;
+                }
+              }
+              
+              if (tileUrl) {
+                setLayerTileConfig(layerId, { 
+                  tileUrl,
+                  ...(tileBounds ? { tileBounds } : {}),
+                });
+              }
+              if (cfg.rendering_config) {
+                useMapLayersStore.getState().setLayerRenderingConfig(layerId, cfg.rendering_config);
+              }
+              // Set active preset if we applied one
+              if (activePreset) {
+                useMapLayersStore.getState().setLayerBandSelection(layerId, null, activePreset);
+              }
+            } catch {
+              // Tile config fetch failed — layer will show without tiles
             }
-          }).catch(() => {});
-        } else if (bl.source_type === 'stac_item' && bl.stac_item_id && bl.dataset_id) {
-          // For single item layers, we need dataset_id + item UUID
-          // The stac_item_id in the layer refers to the STAC item ID string
-          // We'd need a reverse lookup — for now, skip tile loading and let
-          // the user re-select via the items panel
+          })();
         } else if (bl.source_type === 'tile_service' && bl.tile_service_url) {
           setLayerTileConfig(layerId, { tileUrl: bl.tile_service_url });
         }
       });
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mapData?.layers]);
+
+  // ── Sync annotation sets to backend map_layers if missing ──────────────────
+  // When annotation sets exist in useMapContext but aren't in mapData.layers,
+  // persist them so they survive page reload
+  const annSetSyncedRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    if (!mapId || !mapData?.layers || annotationSets.length === 0) return;
+
+    // Find annotation set IDs already in backend map_layers
+    const existingAnnSetIds = new Set(
+      mapData.layers
+        .filter((l) => l.source_type === 'annotation_set' && l.annotation_set_id)
+        .map((l) => l.annotation_set_id!)
+    );
+
+    // For each annotation set NOT in backend, create a map layer
+    annotationSets.forEach((annSet) => {
+      if (existingAnnSetIds.has(annSet.id)) return;
+      if (annSetSyncedRef.current.has(annSet.id)) return;
+      annSetSyncedRef.current.add(annSet.id);
+
+      const layerId = `annset-${annSet.id}`;
+      
+      // Create the backend map layer
+      datasetsApi.addMapLayer(mapId, {
+        name: annSet.name,
+        layer_type: 'vector',
+        source_type: 'annotation_set',
+        annotation_set_id: annSet.id,
+        opacity: 1.0,
+        visible: true,
+      }).then((bl) => {
+        setBackendLayerId(layerId, bl.id);
+        queryClient.invalidateQueries({ queryKey: qk.maps.detail(mapId) });
+      }).catch(() => {
+        annSetSyncedRef.current.delete(annSet.id);
+      });
+    });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mapId, mapData?.layers, annotationSets, setBackendLayerId, queryClient]);
 
   // ── Persist visibility changes to the backend (immediate) ──
   useEffect(() => {
@@ -271,13 +508,71 @@ export function MapEditorShell({ workspaceId, projectId, mapId }: MapEditorShell
   }, [flushAutoSave]);
 
   // ── Remove dataset layer from map ──────────────────────────
-  const handleRemoveDataset = useCallback((datasetId: string) => {
+  const handleRemoveDataset = useCallback(async (datasetId: string) => {
     const backendId = useMapLayersStore.getState().backendLayerIds[datasetId];
-    removeLayer(datasetId); // also removes from backendLayerIds
-    if (backendId) {
-      datasetsApi.deleteMapLayer(mapId, backendId).catch(() => {});
+    const allLayers = useMapLayersStore.getState().layers;
+    
+    // Find and remove all item layers belonging to this dataset
+    const itemLayersToRemove = Object.entries(allLayers)
+      .filter(([id, layer]) => 
+        layer.parentDatasetId === datasetId && id.startsWith('item-')
+      )
+      .map(([id]) => id);
+    
+    // Remove item layers first (from store immediately, backend async)
+    const itemDeletePromises: Promise<void>[] = [];
+    for (const itemId of itemLayersToRemove) {
+      const itemBackendId = useMapLayersStore.getState().backendLayerIds[itemId];
+      removeLayer(itemId); // Remove from store immediately
+      if (itemBackendId) {
+        itemDeletePromises.push(
+          datasetsApi.deleteMapLayer(mapId, itemBackendId).catch((err) => {
+            console.error('Failed to delete item layer from backend:', itemId, err);
+          })
+        );
+      }
     }
-  }, [mapId, removeLayer]);
+    
+    // Remove the parent dataset layer (from store immediately)
+    removeLayer(datasetId);
+    
+    // Delete from backend (async)
+    const deletePromises: Promise<void>[] = [...itemDeletePromises];
+    if (backendId) {
+      deletePromises.push(
+        datasetsApi.deleteMapLayer(mapId, backendId).catch((err) => {
+          console.error('Failed to delete dataset layer from backend:', datasetId, err);
+          toast.error('Failed to remove layer from map');
+          throw err;
+        })
+      );
+    }
+    
+    // Wait for all deletes to complete, then invalidate the map query
+    try {
+      await Promise.all(deletePromises);
+      // Invalidate map query to refetch updated layers from backend
+      queryClient.invalidateQueries({ queryKey: qk.maps.detail(mapId) });
+    } catch (err) {
+      console.warn('Some layers failed to delete from backend', err);
+    }
+  }, [mapId, removeLayer, queryClient]);
+
+  // ── Remove annotation set layer from map ──────────────────
+  const handleRemoveAnnotationSet = useCallback((setId: string) => {
+    const layerId = `annset-${setId}`;
+    removeLayer(layerId);
+    import('@/lib/api/annotation-sets').then(({ annotationSetsApi }) => {
+      annotationSetsApi.delete(setId).catch(() => {});
+    });
+  }, [removeLayer]);
+
+  // ── Rename annotation set ─────────────────────────────────
+  const handleRenameAnnotationSet = useCallback((setId: string, newName: string) => {
+    import('@/lib/api/annotation-sets').then(({ annotationSetsApi }) => {
+      annotationSetsApi.rename(setId, newName).catch(() => {});
+    });
+  }, []);
 
   // ── Auto-fetch TileJSON when a dataset on this map becomes ready ──
   const tileJsonAttemptedRef = useRef<Set<string>>(new Set());
@@ -326,6 +621,11 @@ export function MapEditorShell({ workspaceId, projectId, mapId }: MapEditorShell
             tileMinZoom: tj.minzoom,
             tileMaxZoom: tj.maxzoom,
           });
+          // Store rendering config for band selection UI
+          const rc = d.metadata?.rendering_config;
+          if (rc) {
+            useMapLayersStore.getState().setLayerRenderingConfig(d.id, rc);
+          }
           // Fly to dataset extent on first tile load
           if (tileBounds) {
             getMapManager().fitBounds(tileBounds);
@@ -383,17 +683,42 @@ export function MapEditorShell({ workspaceId, projectId, mapId }: MapEditorShell
       annotationSetsApi.getFeatures(annSetId)
         .then((fc) => {
           mm.setLayerData(layerId, fc);
+
+          // Compute bounds from all features so zoom-to-layer works
+          let bounds: [number, number, number, number] | null = null;
+          const features = (fc as { features?: { geometry?: { coordinates: number[] | number[][] | number[][][] } }[] })?.features;
+          if (features && features.length > 0) {
+            let minLng = Infinity, maxLng = -Infinity, minLat = Infinity, maxLat = -Infinity;
+            const visitCoords = (coords: unknown) => {
+              if (!Array.isArray(coords)) return;
+              if (typeof coords[0] === 'number') {
+                const [lng, lat] = coords as [number, number];
+                if (lng < minLng) minLng = lng;
+                if (lng > maxLng) maxLng = lng;
+                if (lat < minLat) minLat = lat;
+                if (lat > maxLat) maxLat = lat;
+              } else {
+                for (const c of coords) visitCoords(c);
+              }
+            };
+            for (const f of features) {
+              if (f.geometry?.coordinates) visitCoords(f.geometry.coordinates);
+            }
+            if (minLng !== Infinity) bounds = [minLng, minLat, maxLng, maxLat];
+          }
+
           useMapLayersStore.setState((s) => ({
             layers: s.layers[layerId]
-              ? { ...s.layers, [layerId]: { ...s.layers[layerId], loading: false, error: false } }
+              ? { ...s.layers, [layerId]: { ...s.layers[layerId], loading: false, error: false, bounds } }
               : s.layers,
           }));
         })
         .catch(() => {
-          annSetFetchedRef.current.delete(annSetId);
+          // Do NOT clear annSetFetchedRef here — that would cause an infinite
+          // fetch loop (clear ref → state update → re-render → re-fetch → 404 → repeat).
           useMapLayersStore.setState((s) => ({
             layers: s.layers[layerId]
-              ? { ...s.layers, [layerId]: { ...s.layers[layerId], loading: false } }
+              ? { ...s.layers, [layerId]: { ...s.layers[layerId], loading: false, error: true } }
               : s.layers,
           }));
         });
@@ -418,6 +743,43 @@ export function MapEditorShell({ workspaceId, projectId, mapId }: MapEditorShell
     });
   }, [annotationSets, layers, mapReady, fetchAnnSetFeatures]);
 
+  // Re-fetch annotation set features when signalled (e.g. after annotation save)
+  const refreshAnnotationSetId = useMapLayersStore((s) => s.refreshAnnotationSetId);
+  const clearAnnotationSetRefresh = useMapLayersStore((s) => s.clearAnnotationSetRefresh);
+  useEffect(() => {
+    if (!refreshAnnotationSetId || !mapReady) return;
+    const layerId = `annset-${refreshAnnotationSetId}`;
+    // Allow re-fetch by clearing the guard
+    annSetFetchedRef.current.delete(refreshAnnotationSetId);
+    fetchAnnSetFeatures(refreshAnnotationSetId, layerId);
+    annSetFetchedRef.current.add(refreshAnnotationSetId);
+    clearAnnotationSetRefresh();
+  }, [refreshAnnotationSetId, mapReady, fetchAnnSetFeatures, clearAnnotationSetRefresh]);
+
+  // ── Temporal annotation filtering: show/hide annotation sets by timeline frame ──
+  const timelineIndex = useMapLayersStore((s) => s.timelineIndex);
+  const timelineItems = useMapLayersStore((s) => s.timelineItems);
+  const setLayerVisibleForTimeline = useMapLayersStore((s) => s.setLayerVisible);
+
+  useEffect(() => {
+    if (!timelineEnabled || !timelineDatasetId || timelineItems.length === 0) return;
+    const currentItem = timelineItems[timelineIndex];
+    const currentStacItemId = currentItem?.stac_item_id ?? null;
+
+    annotationSets.forEach((annSet) => {
+      const layerId = `annset-${annSet.id}`;
+      if (!layers[layerId]) return;
+
+      // If this annotation set is linked to the timeline dataset
+      if (annSet.dataset_id === timelineDatasetId) {
+        // Show only if the set's stac_item_id matches current frame (or has no stac_item_id = show always)
+        const shouldShow = !annSet.stac_item_id || annSet.stac_item_id === currentStacItemId;
+        setLayerVisibleForTimeline(layerId, shouldShow);
+      }
+      // Annotation sets not linked to the timeline dataset are left unchanged
+    });
+  }, [timelineEnabled, timelineDatasetId, timelineIndex, timelineItems, annotationSets, layers, setLayerVisibleForTimeline]);
+
   // Dataset footprints (for datasets on the map that don't have tileUrl yet)
   useEffect(() => {
     if (!mapReady) return;
@@ -434,6 +796,18 @@ export function MapEditorShell({ workspaceId, projectId, mapId }: MapEditorShell
           geometry: d.geometry,
         };
         mm.setLayerData(d.id, footprintData);
+
+        // Compute bounds from geometry so zoom-to-layer works for footprint layers
+        if (!layer.bounds) {
+          const geomBounds = mm.computeBoundsFromGeometry(d.geometry);
+          if (geomBounds) {
+            useMapLayersStore.setState((s) => ({
+              layers: s.layers[d.id]
+                ? { ...s.layers, [d.id]: { ...s.layers[d.id], bounds: geomBounds } }
+                : s.layers,
+            }));
+          }
+        }
       }
     });
   }, [datasets, layers, mapReady]);
@@ -617,7 +991,8 @@ export function MapEditorShell({ workspaceId, projectId, mapId }: MapEditorShell
           alerts={alerts}
           annotationSets={annotationSets}
           onRemoveDataset={handleRemoveDataset}
-          onLayerMove={handleLayerMove}
+          onRemoveAnnotationSet={handleRemoveAnnotationSet}
+          onRenameAnnotationSet={handleRenameAnnotationSet}
         />
 
         <RightPanel topOffset={0} bottomOffset={0} mapId={mapId} projectId={projectId} />
@@ -631,6 +1006,9 @@ export function MapEditorShell({ workspaceId, projectId, mapId }: MapEditorShell
           datasets={datasets}
           onClose={() => setLibraryOpen(false)}
         />
+
+        {/* ── Floating Timeline panel — positioned within map area ── */}
+        {timelineEnabled && <TimelinePanel />}
 
       </div>
 

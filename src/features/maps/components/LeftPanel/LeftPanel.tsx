@@ -1,12 +1,21 @@
 'use client';
 
-import { useState } from 'react';
-import { Layers, ChevronLeft, ChevronRight, ChevronDown, ChevronUp } from 'lucide-react';
-import { LayerGroupSection } from './LayerGroupSection';
-import { DatasetLayerItem } from './DatasetLayerItem';
-import { AnnotationLayerItem } from './AnnotationLayerItem';
-import { LayerItem } from './LayerItem';
-import { LayerContextMenu } from './LayerContextMenu';
+import { useState, useCallback } from 'react';
+import { Layers, ChevronLeft, ChevronRight, ChevronDown } from 'lucide-react';
+import {
+  DndContext,
+  closestCenter,
+  PointerSensor,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+} from '@dnd-kit/core';
+import {
+  SortableContext,
+  verticalListSortingStrategy,
+} from '@dnd-kit/sortable';
+import { restrictToVerticalAxis } from '@dnd-kit/modifiers';
+import { LayerCard } from './LayerCard';
 import type { Dataset, Annotation, TrackedObject, Alert, AnnotationSet } from '@/types/api';
 import { useMapLayersStore } from '@/stores/mapLayersStore';
 import { MC, MAP_Z } from '../../mapColors';
@@ -27,7 +36,8 @@ export interface LeftPanelProps {
   alerts: Alert[];
   annotationSets?: AnnotationSet[];
   onRemoveDataset?: (datasetId: string) => void;
-  onLayerMove?: (layerId: string, direction: 'up' | 'down') => void;
+  onRemoveAnnotationSet?: (setId: string) => void;
+  onRenameAnnotationSet?: (setId: string, newName: string) => void;
 }
 
 export function LeftPanel({
@@ -35,17 +45,20 @@ export function LeftPanel({
   onToggle,
   topOffset,
   bottomOffset,
+  mapId,
   datasets,
   annotations,
   trackedObjects,
   alerts,
   annotationSets = [],
   onRemoveDataset,
-  onLayerMove,
+  onRemoveAnnotationSet,
+  onRenameAnnotationSet,
 }: LeftPanelProps) {
   const [tab, setTab] = useState<PanelTab>('layers');
   const isCompact = useIsCompact();
   const layers = useMapLayersStore((s) => s.layers);
+  const applyReorder = useMapLayersStore((s) => s.applyReorder);
 
   const annotationsByLabel = annotations.reduce<Record<string, Annotation[]>>((acc, a) => {
     if (!acc[a.label]) acc[a.label] = [];
@@ -60,8 +73,43 @@ export function LeftPanel({
     alerts.length;
 
   // ── Build a flat, z_index-sorted layer list for the "all layers" view ──
+  // Item layers (item-*) are nested inside their parent dataset card, not shown top-level
   const sortedLayerEntries = Object.entries(layers)
+    .filter(([id]) => !id.startsWith('item-'))
     .sort(([, a], [, b]) => b.zIndex - a.zIndex); // top of stack first
+
+  const sortedIds = sortedLayerEntries.map(([id]) => id);
+
+  // ── DnD sensors (require 5px move to start drag — avoids accidental drags) ──
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
+  );
+
+  const handleDragEnd = useCallback(
+    (event: DragEndEvent) => {
+      const { active, over } = event;
+      if (!over || active.id === over.id) return;
+
+      const oldIndex = sortedIds.indexOf(active.id as string);
+      const newIndex = sortedIds.indexOf(over.id as string);
+      if (oldIndex === -1 || newIndex === -1) return;
+
+      // Reorder the IDs array
+      const reordered = [...sortedIds];
+      reordered.splice(oldIndex, 1);
+      reordered.splice(newIndex, 0, active.id as string);
+
+      // Map positions to z-index values (highest z for first item)
+      const newOrder: Record<string, number> = {};
+      const maxZ = reordered.length;
+      reordered.forEach((id, i) => {
+        newOrder[id] = maxZ - i;
+      });
+
+      applyReorder(newOrder);
+    },
+    [sortedIds, applyReorder],
+  );
 
   // ── Desktop geometry ────────────────────────────────────────────────────────
   const panelTop = topOffset + 8;
@@ -183,9 +231,8 @@ export function LeftPanel({
         {/* ── LAYERS tab ──────────────────────────────────────── */}
         {tab === 'layers' && (
           <>
-            {/* Z-index ordered layer stack */}
             {sortedLayerEntries.length > 0 && (
-              <div role="tree" aria-label="Map layers" style={{ padding: '4px 0' }}>
+              <div role="list" aria-label="Map layers" style={{ padding: '4px 0' }}>
                 <div style={{
                   padding: '4px 10px 6px',
                   fontSize: 9,
@@ -199,118 +246,64 @@ export function LeftPanel({
                 }}>
                   <span>Draw order</span>
                   <span style={{ fontSize: 8, color: MC.textMuted, fontWeight: 500, textTransform: 'none', letterSpacing: 0 }}>
-                    top → bottom
+                    drag to reorder
                   </span>
                 </div>
 
-                {sortedLayerEntries.map(([id, layer], idx) => {
-                  const dataset = datasets.find((d) => d.id === id);
-                  const annotationLabel = id.startsWith('annotation-') ? id.replace('annotation-', '') : null;
-                  const annSetId = id.startsWith('annset-') ? id.replace('annset-', '') : null;
-                  const annSet = annSetId ? annotationSets.find((s) => s.id === annSetId) : null;
-                  const isFirst = idx === 0;
-                  const isLast = idx === sortedLayerEntries.length - 1;
+                <DndContext
+                  sensors={sensors}
+                  collisionDetection={closestCenter}
+                  modifiers={[restrictToVerticalAxis]}
+                  onDragEnd={handleDragEnd}
+                >
+                  <SortableContext items={sortedIds} strategy={verticalListSortingStrategy}>
+                    {sortedLayerEntries.map(([id, layer]) => {
+                      const dataset = datasets.find((d) => d.id === id);
+                      const annSetId = id.startsWith('annset-') ? id.replace('annset-', '') : null;
+                      const annSet = annSetId ? annotationSets.find((s) => s.id === annSetId) : null;
 
-                  return (
-                    <div key={id} style={{ display: 'flex', alignItems: 'flex-start' }}>
-                      {/* Reorder controls */}
-                      {onLayerMove && sortedLayerEntries.length > 1 && (
-                        <div style={{
-                          display: 'flex',
-                          flexDirection: 'column',
-                          gap: 1,
-                          padding: '4px 0 0 6px',
-                          flexShrink: 0,
-                        }}>
-                          <button
-                            onClick={() => onLayerMove(id, 'up')}
-                            disabled={isFirst}
-                            title="Move up (higher draw order)"
-                            style={{
-                              width: 16, height: 14,
-                              display: 'flex', alignItems: 'center', justifyContent: 'center',
-                              background: 'transparent', border: 'none',
-                              color: isFirst ? MC.borderLight : MC.textMuted,
-                              cursor: isFirst ? 'default' : 'pointer',
-                              borderRadius: 2,
-                              padding: 0,
-                            }}
-                          >
-                            <ChevronUp size={10} />
-                          </button>
-                          <button
-                            onClick={() => onLayerMove(id, 'down')}
-                            disabled={isLast}
-                            title="Move down (lower draw order)"
-                            style={{
-                              width: 16, height: 14,
-                              display: 'flex', alignItems: 'center', justifyContent: 'center',
-                              background: 'transparent', border: 'none',
-                              color: isLast ? MC.borderLight : MC.textMuted,
-                              cursor: isLast ? 'default' : 'pointer',
-                              borderRadius: 2,
-                              padding: 0,
-                            }}
-                          >
-                            <ChevronDown size={10} />
-                          </button>
-                        </div>
-                      )}
+                      // Resolve display name
+                      let displayName: string;
+                      if (dataset) {
+                        displayName = dataset.name;
+                      } else if (annSet) {
+                        displayName = annSet.name;
+                      } else if (id === 'tracking-all') {
+                        displayName = `${trackedObjects.length} tracked object${trackedObjects.length !== 1 ? 's' : ''}`;
+                      } else if (id === 'alerts-all') {
+                        displayName = `${alerts.length} alert${alerts.length !== 1 ? 's' : ''}`;
+                      } else {
+                        displayName = layer.tileServiceUrl ? 'Tile Service' : id;
+                      }
 
-                      {/* Layer content */}
-                      <div style={{ flex: 1, minWidth: 0 }}>
-                        {dataset ? (
-                          <DatasetLayerItem
-                            dataset={dataset}
-                            onRemove={onRemoveDataset ? () => onRemoveDataset(dataset.id) : undefined}
-                          />
-                        ) : annSet ? (
-                          <LayerItem
-                            id={id}
-                            name={annSet.name}
-                            type="annotation"
-                            legend={
-                              annSet.schema?.classes?.map((cls) => ({
-                                label: cls.name,
-                                color: cls.style?.definition?.fillColor ?? MC.accent,
-                              })) ?? undefined
-                            }
-                          />
-                        ) : annotationLabel ? (
-                          <AnnotationLayerItem
-                            label={annotationLabel}
-                            count={annotationsByLabel[annotationLabel]?.length ?? 0}
-                          />
-                        ) : id === 'tracking-all' ? (
-                          <LayerItem
-                            id="tracking-all"
-                            name={`${trackedObjects.length} tracked object${trackedObjects.length !== 1 ? 's' : ''}`}
-                            type="tracking"
-                          />
-                        ) : id === 'alerts-all' ? (
-                          <LayerItem
-                            id="alerts-all"
-                            name={`${alerts.length} alert${alerts.length !== 1 ? 's' : ''}`}
-                            type="alert"
-                          />
-                        ) : (
-                          <LayerItem
-                            id={id}
-                            name={layer.tileServiceUrl ? 'Tile Service' : id}
-                            type={layer.type}
-                          />
-                        )}
-                      </div>
+                      // Remove handler
+                      const handleRemove = dataset && onRemoveDataset
+                        ? () => onRemoveDataset(dataset.id)
+                        : annSet && onRemoveAnnotationSet
+                          ? () => onRemoveAnnotationSet(annSet.id)
+                          : undefined;
 
-                      {/* Context menu for non-dataset layers */}
-                      {!dataset && (
-                        <div style={{ flexShrink: 0, paddingTop: 4, paddingRight: 4 }}>
-                          <LayerContextMenu layerId={id} />
-                        </div>
-                      )}
-                    </div>
-                  );
-                })}
+                      // Rename handler (annotation sets only)
+                      const handleRename = annSet && onRenameAnnotationSet
+                        ? (newName: string) => onRenameAnnotationSet(annSet.id, newName)
+                        : undefined;
+
+                      return (
+                        <LayerCard
+                          key={id}
+                          id={id}
+                          name={displayName}
+                          type={layer.type}
+                          dataset={dataset}
+                          annotationSet={annSet ?? undefined}
+                          mapId={mapId}
+                          onRemove={handleRemove}
+                          onRename={handleRename}
+                        />
+                      );
+                    })}
+                  </SortableContext>
+                </DndContext>
               </div>
             )}
 
@@ -328,25 +321,6 @@ export function LeftPanel({
                   Open the Library to add datasets, or use the Annotate tools to draw on the map.
                 </div>
               </div>
-            )}
-
-            {/* Grouped sections (legacy view — shown below z-ordered list) */}
-            {sortedLayerEntries.length === 0 && (
-              <>
-                <LayerGroupSection title="Datasets" count={datasets.length} defaultOpen>
-                  {datasets.length === 0 ? (
-                    <EmptyHint>No datasets — add from Library</EmptyHint>
-                  ) : (
-                    datasets.map((d) => (
-                      <DatasetLayerItem
-                        key={d.id}
-                        dataset={d}
-                        onRemove={onRemoveDataset ? () => onRemoveDataset(d.id) : undefined}
-                      />
-                    ))
-                  )}
-                </LayerGroupSection>
-              </>
             )}
           </>
         )}
@@ -560,14 +534,6 @@ export function LeftPanel({
 }
 
 // ─── Sub-components ────────────────────────────────────────────────────────────
-function EmptyHint({ children }: { children: React.ReactNode }) {
-  return (
-    <div style={{ padding: '5px 12px 8px 30px', fontSize: 11, color: MC.textMuted, fontStyle: 'italic' }}>
-      {children}
-    </div>
-  );
-}
-
 function LegendSection({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <div style={{ marginBottom: 16 }}>

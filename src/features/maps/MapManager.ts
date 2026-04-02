@@ -82,6 +82,8 @@ export class MapManager {
   private L: typeof import('leaflet') | null = null;
   /** Pointer markers for dataset layers */
   private pointerLayers = new Map<string, L.Marker>();
+  /** LayerGroup that owns each pointer (for add/remove within the group) */
+  private pointerParentGroups = new Map<string, L.LayerGroup>();
   /** Tracks which pointers are currently visible (zoom-based) */
   private visiblePointers = new Set<string>();
   /** Currently selected/highlighted layer ID */
@@ -96,7 +98,8 @@ export class MapManager {
     
     // Create custom panes with explicit z-indices
     // awakeforest-basemap (z: 0) ← always behind data
-    // awakeforest-data (z: 100) ← all data layers
+    // awakeforest-data (z: 100) ← dataset raster/vector tiles
+    // awakeforest-annotations (z: 150) ← annotation layers (always above datasets)
     // awakeforest-pointers (z: 200) ← layer pointer markers
     try {
       if (!map.getPane('awakeforest-basemap')) {
@@ -106,6 +109,10 @@ export class MapManager {
       if (!map.getPane('awakeforest-data')) {
         const pane = map.createPane('awakeforest-data');
         (pane as HTMLElement).style.zIndex = '100';
+      }
+      if (!map.getPane('awakeforest-annotations')) {
+        const pane = map.createPane('awakeforest-annotations');
+        (pane as HTMLElement).style.zIndex = '150';
       }
       if (!map.getPane('awakeforest-pointers')) {
         const pane = map.createPane('awakeforest-pointers');
@@ -326,6 +333,7 @@ export class MapManager {
     const tileLayer = needsAuth
       ? this.createAuthTileLayer(config.tileUrl, config)
       : this.L.tileLayer(config.tileUrl, {
+          pane: 'awakeforest-data',
           opacity: config.opacity,
           minZoom: config.tileMinZoom ?? 0,
           maxZoom: config.tileMaxZoom ?? 24,
@@ -376,6 +384,7 @@ export class MapManager {
     }) as TileLayerCtor;
 
     return new AuthTileLayer(url, {
+      pane: 'awakeforest-data',
       opacity: config.opacity,
       minZoom: config.tileMinZoom ?? 0,
       maxZoom: config.tileMaxZoom ?? 24,
@@ -429,6 +438,7 @@ export class MapManager {
     }));
 
     const geoJsonLayer = L.geoJSON(features, {
+      pane: 'awakeforest-annotations',
       style: () => ({
         color: style.color,
         fillColor: style.fillColor,
@@ -438,6 +448,7 @@ export class MapManager {
       }),
       pointToLayer: (_feature, latlng) =>
         L.circleMarker(latlng, {
+          pane: 'awakeforest-annotations',
           radius: style.radius,
           color: style.color,
           fillColor: style.fillColor,
@@ -472,6 +483,7 @@ export class MapManager {
             },
             latlng: [e.latlng.lat, e.latlng.lng],
             layerRef: layer,
+            layerId: config.id,
           });
 
           const label = feature.properties?.label ?? 'Annotation';
@@ -521,6 +533,7 @@ export class MapManager {
     };
 
     const geoJsonLayer = L.geoJSON(fc as unknown as GeoJSON.FeatureCollection, {
+      pane: 'awakeforest-annotations',
       style: (feature) => {
         const classId = feature?.properties?.class_id;
         return resolveStyle(classId);
@@ -529,6 +542,7 @@ export class MapManager {
         const classId = feature?.properties?.class_id;
         const s = resolveStyle(classId);
         return L.circleMarker(latlng, {
+          pane: 'awakeforest-annotations',
           radius: style.radius,
           ...s,
         });
@@ -550,17 +564,24 @@ export class MapManager {
                 }
               : {};
 
+          // Derive annotation_set_id from config ID (format: "annset-{uuid}")
+          const annotationSetId = config.id.startsWith('annset-') ? config.id.slice(7) : undefined;
+          const annotationId = (feature.properties?.id ?? feature.id ?? undefined) as string | undefined;
+
           useMapLayersStore.getState().openFeaturePanel({
             layerType: 'annotation',
             featureType: geomStats.featureType,
-            featureId: feature.properties?.id ?? feature.id ?? config.id,
+            featureId: annotationId ?? config.id,
             properties: {
               ...feature.properties,
               ...geomStats.stats,
               ...pointCoords,
+              ...(annotationSetId ? { _annotation_set_id: annotationSetId } : {}),
+              ...(annotationId ? { _annotation_id: annotationId } : {}),
             },
             latlng: [e.latlng.lat, e.latlng.lng],
             layerRef: layer,
+            layerId: config.id,
           });
 
           const label = feature.properties?.class_name ?? feature.properties?.label ?? 'Annotation';
@@ -621,6 +642,7 @@ export class MapManager {
             last_observed_at: obj.last_observed_at,
           },
           latlng: [e.latlng.lat, e.latlng.lng],
+          layerId: config.id,
         });
         L.popup({ closeButton: false, className: 'af-map-popup', offset: [0, -10], maxWidth: 220 })
           .setLatLng(e.latlng)
@@ -680,6 +702,7 @@ export class MapManager {
             created_at: alert.created_at,
           },
           latlng: [e.latlng.lat, e.latlng.lng],
+          layerId: config.id,
         });
       });
 
@@ -705,7 +728,11 @@ export class MapManager {
       }],
     };
 
+    // Footprint layers are non-interactive - clicks pass through to map handler
+    // which uses findTileLayerAtPoint to select the appropriate tile layer
     return L.geoJSON(featureCollection, {
+      pane: 'awakeforest-data',
+      interactive: false,
       style: () => ({
         color: style.color,
         fillColor: style.fillColor,
@@ -714,21 +741,6 @@ export class MapManager {
         dashArray: '4 4',
         opacity,
       }),
-      onEachFeature: (feature, layer) => {
-        layer.on('click', (e: L.LeafletMouseEvent) => {
-          useMapLayersStore.getState().openFeaturePanel({
-            layerType: 'dataset',
-            featureType: 'dataset',
-            featureId: feature.properties?.id ?? data.id,
-            properties: feature.properties ?? {},
-            latlng: [e.latlng.lat, e.latlng.lng],
-          });
-        });
-        layer.bindTooltip(data.name, {
-          sticky: true,
-          className: 'leaflet-tooltip-dark',
-        });
-      },
     });
   }
 
@@ -737,7 +749,8 @@ export class MapManager {
   private rebuildDataLayer(id: string, config: LayerConfig): void {
     if (!this.map || !this.L) return;
 
-    const wasVisible = this.onMap.has(id);
+    const wasOnMap = this.onMap.has(id);
+    const hadLeafletLayer = this.leafletLayers.has(id);
     this.removeLayerFromMap(id);
 
     const data = this.dataStore.get(id);
@@ -753,7 +766,9 @@ export class MapManager {
     if (!layer) return;
 
     this.leafletLayers.set(id, layer);
-    if (wasVisible && config.visible) {
+    // Show layer if: it was previously on map, OR this is the first time data
+    // arrived (no prior Leaflet layer existed) and the config says visible.
+    if (config.visible && (wasOnMap || !hadLeafletLayer)) {
       layer.addTo(this.map);
       this.onMap.add(id);
     }
@@ -764,6 +779,70 @@ export class MapManager {
   private removeLayerFromMap(id: string): void {
     const layer = this.leafletLayers.get(id);
     if (layer) {
+      // Helper to aggressively destroy a tile layer
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const destroyTileLayer = (tileLayer: any) => {
+        // Abort any pending tile loads
+        if (typeof tileLayer._abortLoading === 'function') {
+          tileLayer._abortLoading();
+        }
+        
+        // Remove all tiles and revoke blob URLs
+        if (tileLayer._tiles) {
+          const tiles = tileLayer._tiles as Record<string, { el?: HTMLImageElement }>;
+          
+          for (const key in tiles) {
+            const tile = tiles[key];
+            if (tile?.el) {
+              // Cancel any ongoing requests
+              tile.el.onload = null;
+              tile.el.onerror = null;
+              
+              // Revoke blob URLs for auth tile layers
+              if (tile.el.src && tile.el.src.startsWith('blob:')) {
+                URL.revokeObjectURL(tile.el.src);
+              }
+              
+              // Clear the src to stop any pending requests
+              tile.el.src = '';
+            }
+          }
+          // Clear the tile cache
+          tileLayer._tiles = {};
+        }
+        
+        // Clear tile queue if it exists
+        if (tileLayer._tilesToLoad) {
+          tileLayer._tilesToLoad = 0;
+        }
+        
+        // Remove from parent container if it exists
+        if (tileLayer._container && tileLayer._container.parentNode) {
+          tileLayer._container.parentNode.removeChild(tileLayer._container);
+        }
+      };
+
+      // Handle LayerGroup (which may contain a TileLayer)
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      if ((layer as any).eachLayer) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (layer as any).eachLayer((sublayer: any) => {
+          // Only destroy tile layers, not markers
+          if (sublayer._tiles || sublayer._url) {
+            destroyTileLayer(sublayer);
+          }
+        });
+      } else {
+        // Direct TileLayer
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        destroyTileLayer(layer as any);
+      }
+
+      // Remove layer from map (triggers onRemove lifecycle)
+      // Also explicitly remove from map if it has a reference
+      if (this.map) {
+        this.map.removeLayer(layer);
+      }
       layer.remove();
       this.onMap.delete(id);
     }
@@ -773,6 +852,7 @@ export class MapManager {
     if (pointer) {
       pointer.remove();
       this.pointerLayers.delete(id);
+      this.pointerParentGroups.delete(id);
       this.visiblePointers.delete(id);
     }
   }
@@ -800,17 +880,21 @@ export class MapManager {
     const pointerConfig = POINTER_CONFIGS[pointerType];
     const marker = createPointerMarker(bounds, pointerConfig, config, config.name || config.id);
 
-    // Store pointer reference for zoom-based visibility and style updates
+    // Store pointer reference and parent group for zoom-based visibility
     this.pointerLayers.set(config.id, marker);
-    this.visiblePointers.add(config.id);
+    this.pointerParentGroups.set(config.id, layerGroup);
 
     // Attach click handler to zoom to bounds
     marker.on('click', () => {
       this.fitBounds([west, south, east, north]);
     });
 
-    // Add pointer to layer group
-    layerGroup.addLayer(marker);
+    // Only add pointer if zoom is below threshold (zoom < 12)
+    const currentZoom = this.map?.getZoom() ?? 0;
+    if (isPointerVisibleAtZoom(currentZoom)) {
+      layerGroup.addLayer(marker);
+      this.visiblePointers.add(config.id);
+    }
 
     return layerGroup;
   }
@@ -910,6 +994,40 @@ export class MapManager {
   }
 
   /**
+   * Find the topmost visible tile layer whose bounds contain the given point.
+   * Returns the layer ID, or null if no match.
+   */
+  findTileLayerAtPoint(latlng: L.LatLng): string | null {
+    const store = useMapLayersStore.getState();
+    const configs = store.layers;
+
+    // Collect visible tile layers with bounds, sorted by z-index (highest first)
+    const candidates: { id: string; zIndex: number; bounds: [number, number, number, number] }[] = [];
+    for (const [id, config] of Object.entries(configs)) {
+      if (!config.visible || !config.tileUrl) continue;
+      // Use tileBounds or bounds
+      const b = config.tileBounds ?? config.bounds;
+      if (!b) continue;
+      candidates.push({ id, zIndex: config.zIndex, bounds: b });
+    }
+
+    // Sort by z-index descending (topmost first)
+    candidates.sort((a, b) => b.zIndex - a.zIndex);
+
+    const lat = latlng.lat;
+    const lng = latlng.lng;
+
+    for (const c of candidates) {
+      const [west, south, east, north] = c.bounds;
+      if (lat >= south && lat <= north && lng >= west && lng <= east) {
+        return c.id;
+      }
+    }
+
+    return null;
+  }
+
+  /**
    * Clear layer focus.
    */
   clearFocus(): void {
@@ -932,14 +1050,23 @@ export class MapManager {
     for (const [layerId, marker] of this.pointerLayers) {
       const shouldShow = isPointerVisibleAtZoom(zoom, threshold);
       const isOnMap = this.visiblePointers.has(layerId);
+      const parentGroup = this.pointerParentGroups.get(layerId);
 
       if (shouldShow && !isOnMap && this.leafletLayers.has(layerId)) {
-        // Add pointer to map
-        marker.addTo(this.map);
+        // Add pointer back to its parent LayerGroup (or directly to map if no group)
+        if (parentGroup) {
+          parentGroup.addLayer(marker);
+        } else {
+          marker.addTo(this.map);
+        }
         this.visiblePointers.add(layerId);
       } else if (!shouldShow && isOnMap) {
-        // Remove pointer from map
-        this.map.removeLayer(marker);
+        // Remove pointer from its parent LayerGroup (or from map)
+        if (parentGroup) {
+          parentGroup.removeLayer(marker);
+        } else {
+          this.map.removeLayer(marker);
+        }
         this.visiblePointers.delete(layerId);
       }
     }

@@ -106,7 +106,7 @@ export function RightPanel({ topOffset, bottomOffset, mapId, projectId }: RightP
 
       {/* Content */}
       <div style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
-        {rightPanelMode === 'new-annotation' && <NewAnnotationPanel />}
+        {rightPanelMode === 'new-annotation' && <NewAnnotationPanel mapId={mapId} projectId={projectId} />}
         {rightPanelMode === 'measurement' && <MeasurementPanel />}
         {rightPanelMode === 'feature' && selectedFeature && (
           <FeaturePropertiesPanel feature={selectedFeature} />
@@ -118,7 +118,7 @@ export function RightPanel({ topOffset, bottomOffset, mapId, projectId }: RightP
           />
         )}
         {rightPanelMode === 'dataset' && selectedDatasetId && (
-          <DatasetInfoPanel datasetId={selectedDatasetId} mapId={mapId} />
+          <DatasetInfoPanel datasetId={selectedDatasetId} />
         )}
         {rightPanelMode === 'items' && selectedItemsDatasetId && (
           <DatasetItemsPanel datasetId={selectedItemsDatasetId} mapId={mapId} />

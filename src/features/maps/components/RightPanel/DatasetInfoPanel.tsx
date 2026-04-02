@@ -1,17 +1,15 @@
 'use client';
 
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { toast } from 'sonner';
-import { ExternalLink, Map, Layers, FileImage, ChevronRight, Download } from 'lucide-react';
+import { useQuery } from '@tanstack/react-query';
+import { ExternalLink, FileImage, ChevronRight, Download } from 'lucide-react';
 import { datasetsApi } from '@/lib/api/datasets';
 import { qk } from '@/lib/query-keys';
 import { useMapLayersStore } from '@/stores/mapLayersStore';
-import { getMapInstance } from '@/stores/mapStore';
 import { MC } from '../../mapColors';
+import type { DatasetMetadata } from '@/types/api';
 
 interface DatasetInfoPanelProps {
   datasetId: string;
-  mapId?: string;
 }
 
 function MetaRow({ label, value }: { label: string; value: React.ReactNode }) {
@@ -30,71 +28,12 @@ const STATUS_COLORS: Record<string, string> = {
   failed:    MC.danger,
 };
 
-export function DatasetInfoPanel({ datasetId, mapId }: DatasetInfoPanelProps) {
-  const queryClient = useQueryClient();
-  const initLayer = useMapLayersStore((s) => s.initLayer);
-  const setBackendLayerId = useMapLayersStore((s) => s.setBackendLayerId);
-  const setLayerTileConfig = useMapLayersStore((s) => s.setLayerTileConfig);
-  const layers = useMapLayersStore((s) => s.layers);
+export function DatasetInfoPanel({ datasetId }: DatasetInfoPanelProps) {
   const openItemsPanel = useMapLayersStore((s) => s.openItemsPanel);
-  const isOnMap = !!layers[datasetId];
 
   const { data: dataset, isLoading } = useQuery({
     queryKey: qk.datasets.detail(datasetId),
     queryFn: () => datasetsApi.get(datasetId),
-  });
-
-  const addToMapMutation = useMutation({
-    mutationFn: async () => {
-      if (!dataset) return;
-
-      // Initialize the layer immediately (optimistic)
-      initLayer(datasetId, 'dataset', { sourceType: 'dataset' });
-
-      // For raster datasets with a STAC collection, fetch TileJSON to get tile URL
-      if (dataset.status === 'ready' && dataset.stac_collection_id) {
-        try {
-          const tileJson = await datasetsApi.getTileJson(datasetId);
-          if (tileJson.tiles[0]) {
-            setLayerTileConfig(datasetId, {
-              tileUrl: tileJson.tiles[0],
-              tileBounds: tileJson.bounds,
-              tileMinZoom: tileJson.minzoom,
-              tileMaxZoom: tileJson.maxzoom,
-            });
-
-            // Fly to dataset spatial extent
-            const map = getMapInstance();
-            if (map && tileJson.bounds) {
-              const [west, south, east, north] = tileJson.bounds;
-              map.fitBounds([[south, west], [north, east]], { padding: [40, 40], maxZoom: 16 });
-            }
-          }
-        } catch {
-          // TileJSON not available — footprint polygon will be used instead
-        }
-      }
-
-      // Persist layer to the backend map record
-      if (mapId) {
-        try {
-          const bl = await datasetsApi.addMapLayer(mapId, {
-            name: dataset.name,
-            layer_type: dataset.dataset_type,
-            source_type: 'dataset',
-            dataset_id: datasetId,
-            opacity: 1.0,
-            visible: true,
-          });
-          setBackendLayerId(datasetId, bl.id);
-          queryClient.invalidateQueries({ queryKey: ['map-layers', mapId] });
-        } catch {
-          // non-critical — layer is already in client store
-        }
-      }
-    },
-    onSuccess: () => toast.success(`"${dataset?.name}" added to map`),
-    onError: () => toast.error('Failed to add to map'),
   });
 
   if (isLoading) {
@@ -207,6 +146,9 @@ export function DatasetInfoPanel({ datasetId, mapId }: DatasetInfoPanelProps) {
           } />
         )}
         <MetaRow label="Type" value={dataset.dataset_type} />
+        {inferSource(dataset.metadata) && (
+          <MetaRow label="Source" value={inferSource(dataset.metadata)!} />
+        )}
         {dataset.metadata?.gsd_min != null && (
           <MetaRow
             label="GSD"
@@ -232,46 +174,6 @@ export function DatasetInfoPanel({ datasetId, mapId }: DatasetInfoPanelProps) {
 
       {/* Actions */}
       <div style={{ padding: '10px 14px', borderTop: `1px solid ${MC.border}`, display: 'flex', flexDirection: 'column', gap: 7 }}>
-        {!isOnMap && dataset.status === 'ready' && (
-          <button
-            onClick={() => addToMapMutation.mutate()}
-            disabled={addToMapMutation.isPending}
-            style={{
-              height: 32,
-              borderRadius: 5,
-              border: 'none',
-              background: MC.accent,
-              color: '#1c2119',
-              fontSize: 12,
-              fontWeight: 700,
-              cursor: 'pointer',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              gap: 6,
-              opacity: addToMapMutation.isPending ? 0.6 : 1,
-            }}
-          >
-            <Map size={12} />
-            {addToMapMutation.isPending ? 'Adding…' : 'Add full mosaic to map'}
-          </button>
-        )}
-
-        {isOnMap && (
-          <div style={{
-            height: 30,
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            gap: 6,
-            fontSize: 12,
-            color: MC.success,
-          }}>
-            <Layers size={12} />
-            On this map
-          </div>
-        )}
-
         {dataset.status === 'ready' && (
           <button
             onClick={async () => {
@@ -279,7 +181,7 @@ export function DatasetInfoPanel({ datasetId, mapId }: DatasetInfoPanelProps) {
                 const { download_url } = await datasetsApi.getDownloadUrl(datasetId);
                 window.open(download_url, '_blank');
               } catch {
-                toast.error('Download URL not available');
+                // download not available
               }
             }}
             style={{
@@ -327,6 +229,23 @@ export function DatasetInfoPanel({ datasetId, mapId }: DatasetInfoPanelProps) {
       </div>
     </div>
   );
+}
+
+/** Infer source type label from metadata (explicit or GSD-based). */
+function inferSource(metadata: DatasetMetadata | null | undefined): string | null {
+  if (!metadata) return null;
+  const explicit = (metadata as Record<string, unknown>).source_type as string | undefined;
+  if (explicit) {
+    const labels: Record<string, string> = { drone: 'Drone', lidar: 'LiDAR', satellite: 'Satellite', aerial: 'Aerial' };
+    return labels[explicit] ?? explicit;
+  }
+  const gsd = metadata.gsd_min;
+  if (gsd != null) {
+    if (gsd < 0.1) return 'Drone';
+    if (gsd < 5) return 'Satellite (HR)';
+    return 'Satellite';
+  }
+  return null;
 }
 
 function formatBytes(bytes: number): string {

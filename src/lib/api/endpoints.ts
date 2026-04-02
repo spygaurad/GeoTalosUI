@@ -63,6 +63,8 @@ export const EP = {
     items: (id: string) => `datasets/${id}/items`,
     itemTileConfig: (datasetId: string, itemId: string) =>
       `datasets/${datasetId}/items/${itemId}/tile-config`,
+    itemTileConfigByStacId: (datasetId: string, stacItemId: string) =>
+      `datasets/${datasetId}/items/by-stac-id/${stacItemId}/tile-config`,
     downloadUrl: (id: string) => `datasets/${id}/download-url`,
     tileJson: (id: string) => `datasets/${id}/tilejson`,
     // Multipart upload flow — correct nested paths per API docs:
@@ -107,12 +109,15 @@ export const EP = {
   },
 
   annotationSets: {
+    listByProject: (projectId: string) => `projects/${projectId}/annotation-sets`,
     listByMap: (mapId: string) => `maps/${mapId}/annotation-sets`,
     detail: (id: string) => `annotation-sets/${id}`,
     features: (id: string) => `annotation-sets/${id}/features`,
     addAnnotation: (id: string) => `annotation-sets/${id}/annotations`,
     annotationDetail: (setId: string, annId: string) =>
       `annotation-sets/${setId}/annotations/${annId}`,
+    /** Auto-resolves annotation set — creates one if needed. */
+    addAnnotationOnMap: (mapId: string) => `maps/${mapId}/annotations`,
   },
 
   annotationSchemas: {
@@ -199,19 +204,20 @@ export const EP = {
   },
 
   tiles: {
-    mosaicRegister: 'tiles/mosaic/register',
-    mosaicInfo: (searchId: string) => `tiles/mosaic/${searchId}/info`,
-    mosaicTileJson: (searchId: string) => `tiles/mosaic/${searchId}/tilejson.json`,
+    // Tier 1: Collection-level tiles (whole dataset)
+    collectionTile: (collectionId: string, z: number, x: number, y: number, fmt: string) =>
+      `tiles/collections/${collectionId}/${z}/${x}/${y}.${fmt}`,
+    // Tier 2: Item-level tiles (single STAC item)
+    itemTile: (collectionId: string, itemId: string, z: number, x: number, y: number, fmt: string) =>
+      `tiles/collections/${collectionId}/items/${itemId}/${z}/${x}/${y}.${fmt}`,
+    // Tier 3: Search-based mosaics (multi-collection / multi-item)
     mosaicTile: (searchId: string, z: number, x: number, y: number, fmt: string) =>
-      `tiles/mosaic/${searchId}/tiles/${z}/${x}/${y}.${fmt}`,
-    itemTile: (
-      collectionId: string,
-      itemId: string,
-      z: number,
-      x: number,
-      y: number,
-      fmt: string,
-    ) => `tiles/item/${collectionId}/${itemId}/${z}/${x}/${y}.${fmt}`,
+      `tiles/mosaic/${searchId}/${z}/${x}/${y}.${fmt}`,
+    multiDatasetTileJson: 'tiles/mosaic/multi-dataset/tilejson',
+    multiItemTileJson: 'tiles/mosaic/multi-item/tilejson',
+    // Legacy
+    stacTile: (z: number, x: number, y: number, fmt: string) =>
+      `tiles/stac/${z}/${x}/${y}.${fmt}`,
   },
 
   basemaps: {
@@ -236,5 +242,22 @@ export const EP = {
     detail: (refId: string) => `map-layers/${refId}`,
     updateStyle: (refId: string) => `map-layers/${refId}/style`,
     delete: (refId: string) => `map-layers/${refId}`,
+  },
+  automation: {
+    nodeCatalog: 'automation/node-catalog',
+    pipelines: 'automation/pipelines',
+    pipelineDetail: (id: string) => `automation/pipelines/${id}`,
+    pipelineValidate: (id: string) => `automation/pipelines/${id}/validate`,
+    pipelineDuplicate: (id: string) => `automation/pipelines/${id}/duplicate`,
+    pipelineRun: (id: string) => `automation/pipelines/${id}/run`,
+    pipelineRuns: (id: string) => `automation/pipelines/${id}/runs`,
+    runDetail: (runId: string) => `automation/runs/${runId}`,
+    runSteps: (runId: string) => `automation/runs/${runId}/steps`,
+    runStepDetail: (runId: string, stepId: string) =>
+      `automation/runs/${runId}/steps/${stepId}`,
+    runCancel: (runId: string) => `automation/runs/${runId}/cancel`,
+    runRetry: (runId: string) => `automation/runs/${runId}/retry`,
+    projectRuns: (projectId: string) => `projects/${projectId}/runs`,
+    sseStream: 'events/stream',
   },
 } as const;

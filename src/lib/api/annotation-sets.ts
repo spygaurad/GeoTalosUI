@@ -17,6 +17,17 @@ export interface AnnotationFeatureCreatePayload {
   properties?: Record<string, unknown> | null;
 }
 
+/** Payload for POST /maps/{mapId}/annotations — auto-resolves annotation set. */
+export interface AnnotationOnMapCreatePayload {
+  class_id: string;
+  geometry: GeoJSONGeometry;
+  confidence?: number | null;
+  properties?: Record<string, unknown> | null;
+  schema_id?: string | null;
+  dataset_id?: string | null;
+  set_name?: string | null;
+}
+
 export interface GeoJSONFeatureCollection {
   type: 'FeatureCollection';
   features: Array<{
@@ -28,6 +39,12 @@ export interface GeoJSONFeatureCollection {
 }
 
 export const annotationSetsApi = {
+  /** List all annotation sets for a project. */
+  listByProject: (projectId: string) =>
+    apiClient
+      .get(EP.annotationSets.listByProject(projectId))
+      .json<{ items: AnnotationSet[] }>(),
+
   /** List annotation sets for a map. */
   listByMap: (mapId: string) =>
     apiClient
@@ -44,6 +61,12 @@ export const annotationSetsApi = {
   create: (mapId: string, data: AnnotationSetCreatePayload) =>
     apiClient
       .post(EP.annotationSets.listByMap(mapId), { json: data })
+      .json<AnnotationSet>(),
+
+  /** Rename an annotation set. */
+  rename: (id: string, name: string) =>
+    apiClient
+      .patch(EP.annotationSets.detail(id), { json: { name } })
       .json<AnnotationSet>(),
 
   /** Delete an annotation set. */
@@ -71,4 +94,10 @@ export const annotationSetsApi = {
   /** Delete an annotation feature. */
   deleteFeature: (setId: string, annId: string) =>
     apiClient.delete(EP.annotationSets.annotationDetail(setId, annId)),
+
+  /** Create annotation with auto-resolved set (finds or creates set on the fly). */
+  addFeatureOnMap: (mapId: string, data: AnnotationOnMapCreatePayload) =>
+    apiClient
+      .post(EP.annotationSets.addAnnotationOnMap(mapId), { json: data })
+      .json<AnnotationFeature>(),
 };

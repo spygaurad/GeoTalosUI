@@ -83,6 +83,7 @@ export function AnnotationPanel({ annotationSet }: AnnotationPanelProps) {
         <AnnotationDrawingTools
           annotationSetId={annotationSet.id}
           schemaClasses={classes as any}
+          allowedGeometryTypes={(schema as AnnotationSchema).geometry_types}
         />
       )}
 

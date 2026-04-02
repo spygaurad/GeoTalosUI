@@ -12,7 +12,6 @@ import { useUploadStore } from '@/stores/uploadStore';
 import { UploadWizard } from '@/features/datasets/components/UploadWizard';
 import { MC, MAP_Z } from '../mapColors';
 import { getMapInstance } from '@/stores/mapStore';
-import { getMapManager } from '../MapManager';
 
 type LibTab = 'datasets' | 'sources' | 'upload';
 
@@ -45,17 +44,19 @@ export function LibraryPanel({
 }: LibraryPanelProps) {
   const [tab, setTab] = useState<LibTab>('datasets');
   const [query, setQuery] = useState('');
+  const [readyOnly, setReadyOnly] = useState(false);
   const [adding, setAdding] = useState<string | null>(null);
   const initLayer = useMapLayersStore((s) => s.initLayer);
   const setBackendLayerId = useMapLayersStore((s) => s.setBackendLayerId);
-  const setLayerTileConfig = useMapLayersStore((s) => s.setLayerTileConfig);
   const layers = useMapLayersStore((s) => s.layers);
   const activeUpload = useUploadStore((s) => s.upload);
   const queryClient = useQueryClient();
 
-  const filtered = datasets.filter(
-    (d) => !query || d.name.toLowerCase().includes(query.toLowerCase())
-  );
+  const filtered = datasets.filter((d) => {
+    if (query && !d.name.toLowerCase().includes(query.toLowerCase())) return false;
+    if (readyOnly && d.status !== 'ready') return false;
+    return true;
+  });
 
   const addToMap = async (d: Dataset) => {
     if (!mapId) {
@@ -66,77 +67,39 @@ export function LibraryPanel({
 
     setAdding(d.id);
     try {
-      // 1. Init layer in store immediately (optimistic)
+      // 1. Init dataset as a group container (no tiles — items are the actual layers)
       initLayer(d.id, 'dataset', { sourceType: 'dataset' });
 
-      // 2. Persist to backend — POST /maps/{id}/layers (immediate save per guide §2A)
+      // 2. Persist to backend
       const bl = await datasetsApi.addMapLayer(mapId, {
         name: d.name,
-        layer_type: d.dataset_type,
+        layer_type: 'raster',
         source_type: 'dataset',
         dataset_id: d.id,
         opacity: 1.0,
         visible: true,
       });
       setBackendLayerId(d.id, bl.id);
-
       queryClient.invalidateQueries({ queryKey: ['map-layers', mapId] });
 
-      // 3. Fetch TileJSON for raster datasets (guide §2B)
-      if (d.status === 'ready' && d.stac_collection_id) {
-        try {
-          const tj = await datasetsApi.getTileJson(d.id);
-          if (tj.tiles[0]) {
-            // Check if TileJSON bounds are defaults (world bounds or center-of-earth)
-            const isWorldBounds = tj.bounds 
-              && tj.bounds[0] === -180 
-              && tj.bounds[1] <= -85 
-              && tj.bounds[2] === 180 
-              && tj.bounds[3] >= 85;
-            const isCenterEarth = tj.bounds
-              && Math.abs(tj.bounds[0]) < 0.0001 
-              && Math.abs(tj.bounds[1]) < 0.0001 
-              && Math.abs(tj.bounds[2]) < 0.0001 
-              && Math.abs(tj.bounds[3]) < 0.0001;
-            
-            // Use dataset geometry bounds if TileJSON has default bounds
-            let tileBounds = tj.bounds;
-            if ((isWorldBounds || isCenterEarth) && d.geometry) {
-              // Compute bounds from geometry via MapManager
-              const mm = getMapManager();
-              const geomBounds = mm.computeBoundsFromGeometry(d.geometry);
-              if (geomBounds) {
-                tileBounds = geomBounds;
-              }
-            }
-            
-            setLayerTileConfig(d.id, {
-              tileUrl: tj.tiles[0],
-              tileBounds,
-              tileMinZoom: tj.minzoom,
-              tileMaxZoom: tj.maxzoom,
-            });
+      // 3. Cache rendering_config for child item layers
+      const rc = d.metadata?.rendering_config;
+      if (rc) {
+        useMapLayersStore.getState().setLayerRenderingConfig(d.id, rc);
+      }
 
-            const map = getMapInstance();
-            if (map && tileBounds) {
-              const [west, south, east, north] = tileBounds;
-              map.fitBounds([[south, west], [north, east]], { padding: [40, 40], maxZoom: 16 });
-            }
-          }
-        } catch {
-          if (d.geometry) {
-            const map = getMapInstance();
-            if (map) {
-              try {
-                // eslint-disable-next-line @typescript-eslint/no-require-imports
-                const L = require('leaflet') as typeof import('leaflet');
-                // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                const layer = L.geoJSON(d.geometry as any);
-                map.fitBounds(layer.getBounds(), { padding: [40, 40] });
-              } catch {
-                // ignore
-              }
-            }
+      // 4. Fly to dataset geometry bounds
+      if (d.geometry) {
+        const map = getMapInstance();
+        if (map) {
+          try {
+            // eslint-disable-next-line @typescript-eslint/no-require-imports
+            const L = require('leaflet') as typeof import('leaflet');
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            const layer = L.geoJSON(d.geometry as any);
+            map.fitBounds(layer.getBounds(), { padding: [40, 40], maxZoom: 16 });
+          } catch {
+            // ignore
           }
         }
       }
@@ -356,7 +319,7 @@ export function LibraryPanel({
               </div>
             )}
 
-            {/* Search */}
+            {/* Search + Filter */}
             <div style={{ padding: '10px 12px', borderBottom: `1px solid ${MC.border}`, flexShrink: 0 }}>
               <div
                 style={{
@@ -385,6 +348,27 @@ export function LibraryPanel({
                   }}
                 />
               </div>
+              {/* Ready-only filter toggle */}
+              <button
+                onClick={() => setReadyOnly((v) => !v)}
+                style={{
+                  marginTop: 8,
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 6,
+                  padding: '5px 8px',
+                  borderRadius: 4,
+                  border: readyOnly ? `1px solid ${MC.accent}` : `1px solid ${MC.border}`,
+                  background: readyOnly ? MC.accentDim : 'transparent',
+                  color: readyOnly ? MC.accent : MC.textMuted,
+                  cursor: 'pointer',
+                  fontSize: 11,
+                  fontWeight: 500,
+                }}
+              >
+                <CheckCircle size={10} />
+                Ready only
+              </button>
             </div>
 
             {/* List */}
@@ -541,7 +525,7 @@ function TileServiceTab({ mapId }: { mapId?: string }) {
         try {
           const bl = await datasetsApi.addMapLayer(mapId, {
             name: displayName,
-            layer_type: 'xyz_tile',
+            layer_type: 'raster', // XYZ tile services are raster layers
             source_type: 'tile_service',
             tile_service_url: tileUrl,
             visible: true,

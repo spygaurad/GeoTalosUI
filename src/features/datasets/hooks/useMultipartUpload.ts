@@ -129,15 +129,30 @@ export function useMultipartUpload() {
             id: string;
             status: JobStatus;
             error: string | null;
+            input_params: Record<string, unknown>;
           }>();
 
           patchUpload({ jobStatus: job.status });
 
           if (job.status === 'completed') {
+            // Multi-folder ZIP uploads store all created dataset IDs in input_params
+            const createdIds = Array.isArray(job.input_params?.created_dataset_ids)
+              ? (job.input_params.created_dataset_ids as string[])
+              : null;
+            patchUpload({ createdDatasetIds: createdIds });
             setPhase('ready');
             queryClient.invalidateQueries({ queryKey: qk.datasets.list() });
             queryClient.invalidateQueries({ queryKey: qk.datasets.detail(datasetId) });
-            toast.success('Dataset ready');
+            if (createdIds && createdIds.length > 1) {
+              for (const id of createdIds) {
+                queryClient.invalidateQueries({ queryKey: qk.datasets.detail(id) });
+              }
+            }
+            toast.success(
+              createdIds && createdIds.length > 1
+                ? `${createdIds.length} datasets ready`
+                : 'Dataset ready',
+            );
             return;
           }
 
@@ -176,6 +191,7 @@ export function useMultipartUpload() {
         progress: { ...INITIAL_PROGRESS, bytesTotal: file.size },
         jobStatus: null,
         error: null,
+        createdDatasetIds: null,
       });
 
       try {

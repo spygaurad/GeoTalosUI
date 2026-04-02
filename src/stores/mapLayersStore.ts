@@ -8,7 +8,10 @@ import type {
   RightPanelMode,
   LayerType,
   PendingAnnotation,
+  BandSelection,
 } from '@/features/maps/types';
+import type { RenderingConfig } from '@/types/api';
+import type { DatasetItem } from '@/types/api';
 
 // ── Feature-click tracking (module-level) ──────────────────────────────────────
 // Used by map click handler to distinguish empty-map clicks from feature clicks.
@@ -88,6 +91,9 @@ interface MapLayersState {
     id: string,
     config: { tileUrl: string; tileBounds?: [number, number, number, number]; tileMinZoom?: number; tileMaxZoom?: number }
   ) => void;
+  setLayerRenderingConfig: (id: string, config: RenderingConfig) => void;
+  setLayerParentDatasetId: (id: string, parentDatasetId: string) => void;
+  setLayerBandSelection: (id: string, bands: BandSelection | null, preset?: string | null) => void;
   getLayer: (id: string) => LayerConfig | undefined;
 
   /** Set z_index values after a reorder operation. Keyed by layer id → new z_index. */
@@ -114,11 +120,42 @@ interface MapLayersState {
   showAnnotationPanel: () => void; // re-show panel without resetting pendingAnnotation
   closeRightPanel: () => void;
 
+  /** Select layer + open appropriate right panel when clicking on a layer in the map (no zoom) */
+  layerOnMapClick: (layerId: string) => void;
+
+  /** Reset all layer state — must be called when switching between maps. */
+  resetForMap: () => void;
+
+  // Signal MapEditorShell to re-fetch features for a specific annotation set
+  refreshAnnotationSetId: string | null;
+  requestAnnotationSetRefresh: (setId: string) => void;
+  clearAnnotationSetRefresh: () => void;
+
   // measurement
   toggleMeasurement: () => void;
   addMeasurementPoint: (pt: [number, number]) => void;
   clearMeasurement: () => void;
   clearMeasurementPoints: () => void; // clear points but keep measuring active
+
+  // ── Timeline / temporal playback ─────────────────────────────────────────────
+  timelineEnabled: boolean;
+  timelineDatasetId: string | null;
+  timelineItems: DatasetItem[];
+  timelineIndex: number;
+  timelinePlaying: boolean;
+  timelineSpeed: number; // ms between frames (default 2000)
+  timelineRange: [string, string] | null; // [from, to] ISO date filter
+  /** Stashed collection tile URL — restored when timeline closes */
+  timelineOriginalTileUrl: string | null;
+
+  openTimeline: (datasetId: string) => void;
+  closeTimeline: () => void;
+  setTimelineItems: (items: DatasetItem[]) => void;
+  setTimelineIndex: (index: number) => void;
+  stepTimeline: (direction: 'next' | 'prev') => void;
+  toggleTimelinePlay: () => void;
+  setTimelineSpeed: (ms: number) => void;
+  setTimelineRange: (range: [string, string] | null) => void;
 }
 
 export const useMapLayersStore = create<MapLayersState>()(
@@ -138,6 +175,47 @@ export const useMapLayersStore = create<MapLayersState>()(
     pendingAnnotation: null,
     autoSaveDirty: false,
     zoomToBounds: null,
+    refreshAnnotationSetId: null,
+    timelineEnabled: false,
+    timelineDatasetId: null,
+    timelineItems: [],
+    timelineIndex: 0,
+    timelinePlaying: false,
+    timelineSpeed: 2000,
+    timelineRange: null,
+    timelineOriginalTileUrl: null,
+    resetForMap: () => {
+      _nextZIndex = 0;
+      set({
+        layers: {},
+        backendLayerIds: {},
+        rightPanelMode: 'none',
+        selectedLayerId: null,
+        selectedFeature: null,
+        selectedDatasetId: null,
+        selectedItemsDatasetId: null,
+        selectedAnnotationSetId: null,
+        measurementActive: false,
+        measurementPoints: [],
+        currentZoom: 2,
+        focusedLayerId: null,
+        pendingAnnotation: null,
+        autoSaveDirty: false,
+        zoomToBounds: null,
+        refreshAnnotationSetId: null,
+        timelineEnabled: false,
+        timelineDatasetId: null,
+        timelineItems: [],
+        timelineIndex: 0,
+        timelinePlaying: false,
+        timelineSpeed: 2000,
+        timelineRange: null,
+        timelineOriginalTileUrl: null,
+      });
+    },
+
+    requestAnnotationSetRefresh: (setId: string) => set({ refreshAnnotationSetId: setId }),
+    clearAnnotationSetRefresh: () => set({ refreshAnnotationSetId: null }),
 
     setBackendLayerId: (datasetId, layerId) =>
       set((s) => ({ backendLayerIds: { ...s.backendLayerIds, [datasetId]: layerId } })),
@@ -162,19 +240,21 @@ export const useMapLayersStore = create<MapLayersState>()(
       }
 
       // Auto-open appropriate right panel
-      if (layer.type === 'dataset') {
-        Object.assign(updates, {
-          rightPanelMode: 'dataset' as const,
-          selectedDatasetId: layerId,
-          selectedFeature: null,
-        });
-      } else if (layer.sourceType === 'annotation_set' && layer.annotationSetId) {
+      if (layer.sourceType === 'annotation_set' && layer.annotationSetId) {
         Object.assign(updates, {
           rightPanelMode: 'annotation-set' as const,
           selectedAnnotationSetId: layer.annotationSetId,
           selectedFeature: null,
         });
+      } else if (layer.sourceType === 'dataset') {
+        // Dataset = collection → show collection metadata panel
+        Object.assign(updates, {
+          rightPanelMode: 'dataset' as const,
+          selectedDatasetId: layerId,
+          selectedFeature: null,
+        });
       } else {
+        // stac_item, tile_service, etc. → style panel (has band selector for raster items)
         Object.assign(updates, {
           rightPanelMode: 'style' as const,
           selectedFeature: null,
@@ -186,7 +266,21 @@ export const useMapLayersStore = create<MapLayersState>()(
 
     initLayer: (id, type, opts) =>
       set((s) => {
-        if (s.layers[id]) return s;
+        const existing = s.layers[id];
+        if (existing) {
+          // Merge missing fields into existing layer (e.g. parentDatasetId from left panel)
+          const updates: Record<string, unknown> = {};
+          if (opts?.parentDatasetId && !existing.parentDatasetId) updates.parentDatasetId = opts.parentDatasetId;
+          if (opts?.stacItemId && !existing.stacItemId) updates.stacItemId = opts.stacItemId;
+          if (opts?.sourceType && !existing.sourceType) updates.sourceType = opts.sourceType;
+          if (Object.keys(updates).length === 0) return s;
+          return {
+            layers: {
+              ...s.layers,
+              [id]: { ...existing, ...updates },
+            },
+          };
+        }
         const zIndex = opts?.zIndex ?? _nextZIndex++;
         const style = type === 'dataset' && opts?.sourceType === 'tile_service'
           ? { ...DEFAULT_TILE_SERVICE_STYLE }
@@ -251,6 +345,34 @@ export const useMapLayersStore = create<MapLayersState>()(
             ...config,
             // Auto-populate bounds from tileBounds for zoom-to-layer
             bounds: config.tileBounds ?? s.layers[id]?.bounds ?? null,
+          },
+        },
+      })),
+
+    setLayerRenderingConfig: (id, config) =>
+      set((s) => ({
+        layers: {
+          ...s.layers,
+          [id]: { ...s.layers[id], renderingConfig: config },
+        },
+      })),
+
+    setLayerParentDatasetId: (id, parentDatasetId) =>
+      set((s) => ({
+        layers: {
+          ...s.layers,
+          [id]: { ...s.layers[id], parentDatasetId },
+        },
+      })),
+
+    setLayerBandSelection: (id, bands, preset) =>
+      set((s) => ({
+        layers: {
+          ...s.layers,
+          [id]: {
+            ...s.layers[id],
+            bandSelection: bands,
+            activePreset: preset ?? null,
           },
         },
       })),
@@ -379,7 +501,11 @@ export const useMapLayersStore = create<MapLayersState>()(
       set({ pendingAnnotation: null, rightPanelMode: 'none' }),
 
     openFeaturePanel: (feature) =>
-      set({ rightPanelMode: 'feature', selectedFeature: feature, selectedLayerId: null }),
+      set({
+        rightPanelMode: 'feature',
+        selectedFeature: feature,
+        selectedLayerId: feature.layerId ?? null,
+      }),
 
     openStylePanel: (layerId) =>
       set({ rightPanelMode: 'style', selectedLayerId: layerId, selectedFeature: null }),
@@ -392,6 +518,17 @@ export const useMapLayersStore = create<MapLayersState>()(
 
     closeRightPanel: () =>
       set({ rightPanelMode: 'none', selectedLayerId: null, selectedFeature: null, selectedDatasetId: null, selectedItemsDatasetId: null, selectedAnnotationSetId: null }),
+
+    layerOnMapClick: (layerId) => {
+      const layer = get().layers[layerId];
+      if (!layer) return;
+      // Always show style panel when clicking on a layer on the map
+      set({
+        selectedLayerId: layerId,
+        rightPanelMode: 'style',
+        selectedFeature: null,
+      });
+    },
 
     toggleMeasurement: () =>
       set((s) => {
@@ -417,5 +554,81 @@ export const useMapLayersStore = create<MapLayersState>()(
       })),
 
     clearMeasurementPoints: () => set({ measurementPoints: [] }),
+
+    // ── Timeline / temporal playback ──────────────────────────────────────────
+
+    openTimeline: (datasetId) => {
+      const layer = get().layers[datasetId];
+      // Stash the current collection tile URL so we can restore it on close
+      const originalUrl = layer?.tileUrl ?? null;
+      set({
+        timelineEnabled: true,
+        timelineDatasetId: datasetId,
+        timelineItems: [],
+        timelineIndex: 0,
+        timelinePlaying: false,
+        timelineRange: null,
+        timelineOriginalTileUrl: originalUrl,
+      });
+    },
+
+    closeTimeline: () =>
+      set({
+        timelineEnabled: false,
+        timelineDatasetId: null,
+        timelineItems: [],
+        timelineIndex: 0,
+        timelinePlaying: false,
+        timelineRange: null,
+        // timelineOriginalTileUrl cleared after restore in useMapSync
+      }),
+
+    setTimelineItems: (items) => set({ timelineItems: items }),
+
+    setTimelineIndex: (index) => set({ timelineIndex: index, timelinePlaying: false }),
+
+    stepTimeline: (direction) =>
+      set((s) => {
+        if (s.timelineItems.length === 0) return s;
+
+        // Filter items by date range if set
+        const filtered = s.timelineRange
+          ? s.timelineItems.filter((item) => {
+              if (!item.datetime) return true;
+              const d = new Date(item.datetime).getTime();
+              const [from, to] = s.timelineRange!;
+              if (from && d < new Date(from).getTime()) return false;
+              if (to && d > new Date(to + 'T23:59:59').getTime()) return false;
+              return true;
+            })
+          : s.timelineItems;
+
+        if (filtered.length === 0) return s;
+
+        // Map current index back to filtered list position
+        const currentItem = s.timelineItems[s.timelineIndex];
+        let filteredIdx = filtered.findIndex((it) => it.id === currentItem?.id);
+        if (filteredIdx === -1) filteredIdx = 0;
+
+        let nextFilteredIdx: number;
+        if (direction === 'next') {
+          nextFilteredIdx = (filteredIdx + 1) % filtered.length;
+        } else {
+          nextFilteredIdx = (filteredIdx - 1 + filtered.length) % filtered.length;
+        }
+
+        // Map back to original items array index
+        const nextItem = filtered[nextFilteredIdx];
+        const newIndex = s.timelineItems.findIndex((it) => it.id === nextItem.id);
+
+        return { timelineIndex: newIndex >= 0 ? newIndex : 0 };
+      }),
+
+    toggleTimelinePlay: () =>
+      set((s) => ({ timelinePlaying: !s.timelinePlaying })),
+
+    setTimelineSpeed: (ms) => set({ timelineSpeed: ms }),
+
+    setTimelineRange: (range) => set({ timelineRange: range }),
   }))
 );

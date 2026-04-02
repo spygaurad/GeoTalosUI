@@ -30,6 +30,8 @@ export interface ActiveUpload {
   progress: UploadProgress;
   jobStatus: JobStatus | null;
   error: string | null;
+  /** For multi-folder ZIP uploads — list of all created dataset IDs. */
+  createdDatasetIds: string[] | null;
 }
 
 interface UploadStore {

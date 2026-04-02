@@ -22,9 +22,11 @@ import {
   AlertCircle,
   UploadCloud,
   Cpu,
+  Workflow,
 } from 'lucide-react';
-import type { ProjectMap, Dataset, ProjectMember } from '@/types/api';
+import type { ProjectMap, Dataset, ProjectMember, Pipeline, PipelineStatus, PipelineTriggerType } from '@/types/api';
 import type { Job, JobStatus } from '@/types/common';
+import { automationApi } from '@/lib/api/automation';
 
 // ── Topographic SVG ──────────────────────────────────────────────────────────
 
@@ -120,12 +122,13 @@ function TopoThumb({
 
 // ── Tab bar ──────────────────────────────────────────────────────────────────
 
-type TabId = 'maps' | 'datasets' | 'annotations' | 'activity' | 'members';
+type TabId = 'maps' | 'datasets' | 'annotations' | 'automations' | 'activity' | 'members';
 
 const TABS: { id: TabId; label: string; icon: React.FC<{ className?: string }> }[] = [
   { id: 'maps', label: 'Maps', icon: Map },
   { id: 'datasets', label: 'Datasets', icon: Database },
   { id: 'annotations', label: 'Annotations', icon: Tags },
+  { id: 'automations', label: 'Automations', icon: Workflow },
   { id: 'activity', label: 'Activity', icon: Activity },
   { id: 'members', label: 'Members', icon: Users },
 ];
@@ -596,6 +599,172 @@ function AnnotationsTab() {
   );
 }
 
+// ── Automations tab ──────────────────────────────────────────────────────
+
+const PIPELINE_STATUS_STYLE: Record<PipelineStatus, { dot: string; label: string }> = {
+  active:   { dot: '#656d4a', label: 'Active' },
+  draft:    { dot: '#9a8878', label: 'Draft' },
+  paused:   { dot: '#a68a64', label: 'Paused' },
+  archived: { dot: '#b0a090', label: 'Archived' },
+};
+
+const TRIGGER_LABELS: Record<PipelineTriggerType, string> = {
+  manual: 'Manual',
+  schedule: 'Schedule',
+  event: 'Event',
+};
+
+function AutomationsTab({
+  projectId,
+  workspaceId,
+}: {
+  projectId: string;
+  workspaceId: string;
+}) {
+  const { data, isLoading } = useQuery({
+    queryKey: qk.automation.pipelines({ project_id: projectId }),
+    queryFn: () => automationApi.listPipelines({ project_id: projectId }),
+  });
+
+  const pipelines = data?.items ?? [];
+  const base = `/workspace/${workspaceId}/projects/${projectId}/automations`;
+
+  if (isLoading) {
+    return (
+      <div className="pt-6 space-y-px">
+        {[1, 2, 3].map((i) => (
+          <div
+            key={i}
+            className="py-4 flex items-center gap-4"
+            style={{ borderBottom: '1px solid #e8d8c4' }}
+          >
+            <div style={{ height: '12px', width: '30%', backgroundColor: '#e8d5b8', borderRadius: '4px' }} />
+            <div style={{ height: '10px', width: '15%', backgroundColor: '#f0e4d4', borderRadius: '4px' }} />
+          </div>
+        ))}
+      </div>
+    );
+  }
+
+  if (pipelines.length === 0) {
+    return (
+      <div className="py-16 text-center">
+        <div
+          className="inline-flex items-center justify-center rounded-xl mb-4"
+          style={{ width: '48px', height: '48px', backgroundColor: '#e8d5b8' }}
+        >
+          <Workflow className="w-5 h-5" style={{ color: '#7f5539' }} />
+        </div>
+        <p style={{ fontSize: '1rem', fontWeight: 600, color: '#2e3428', marginBottom: '6px' }}>
+          No automation pipelines
+        </p>
+        <p style={{ fontSize: '0.875rem', color: '#9a8878', marginBottom: '20px' }}>
+          Build visual workflows to automate inference, quality checks, and analysis.
+        </p>
+        <Link
+          href={`${base}/new`}
+          className="inline-flex items-center gap-2 rounded-xl font-semibold"
+          style={{ backgroundColor: '#7f5539', color: '#f5ede0', padding: '0.625rem 1.25rem', fontSize: '0.875rem' }}
+        >
+          <Plus className="w-3.5 h-3.5" />
+          Create first pipeline
+        </Link>
+      </div>
+    );
+  }
+
+  return (
+    <div className="pt-6">
+      <div className="flex items-center justify-between mb-4">
+        <p style={{ fontSize: '0.8125rem', color: '#9a8878' }}>
+          {pipelines.length} pipeline{pipelines.length !== 1 ? 's' : ''}
+        </p>
+        <Link
+          href={`${base}/new`}
+          className="inline-flex items-center gap-1.5 rounded-lg font-semibold transition-all hover:opacity-90"
+          style={{
+            backgroundColor: '#7f5539',
+            color: '#f5ede0',
+            padding: '0.4rem 0.75rem',
+            fontSize: '0.75rem',
+          }}
+        >
+          <Plus className="w-3 h-3" />
+          New pipeline
+        </Link>
+      </div>
+
+      <div style={{ borderTop: '1px solid #e8d8c4' }}>
+        {pipelines.map((p) => {
+          const s = PIPELINE_STATUS_STYLE[p.status];
+          return (
+            <Link
+              key={p.id}
+              href={`${base}/${p.id}`}
+              className="flex items-center gap-4 py-4 transition-colors"
+              style={{ borderBottom: '1px solid #e8d8c4', textDecoration: 'none' }}
+              onMouseEnter={(e) => {
+                (e.currentTarget as HTMLElement).style.backgroundColor = '#fefbf7';
+              }}
+              onMouseLeave={(e) => {
+                (e.currentTarget as HTMLElement).style.backgroundColor = 'transparent';
+              }}
+            >
+              <div className="flex-1 min-w-0">
+                <p
+                  className="truncate"
+                  style={{ fontSize: '0.875rem', fontWeight: 500, color: '#2e3428', marginBottom: '2px' }}
+                >
+                  {p.name}
+                </p>
+                {p.description && (
+                  <p
+                    className="truncate"
+                    style={{ fontSize: '0.75rem', color: '#9a8878' }}
+                  >
+                    {p.description}
+                  </p>
+                )}
+              </div>
+
+              <div
+                className="hidden md:flex items-center gap-6 shrink-0"
+                style={{ fontSize: '0.75rem', color: '#9a8878' }}
+              >
+                <span>{TRIGGER_LABELS[p.trigger_type]}</span>
+                {p.node_count > 0 && (
+                  <span>{p.node_count} node{p.node_count !== 1 ? 's' : ''}</span>
+                )}
+                <span
+                  className="flex items-center gap-1.5"
+                  style={{ color: s.dot }}
+                >
+                  <span
+                    className="rounded-full"
+                    style={{ width: '6px', height: '6px', backgroundColor: s.dot, display: 'inline-block' }}
+                  />
+                  {s.label}
+                </span>
+              </div>
+
+              <ChevronRight className="w-3.5 h-3.5 shrink-0" style={{ color: '#c4b09c' }} />
+            </Link>
+          );
+        })}
+      </div>
+
+      <Link
+        href={base}
+        className="mt-4 inline-flex items-center gap-1.5 transition-opacity hover:opacity-70"
+        style={{ fontSize: '0.8125rem', color: '#7f5539', textDecoration: 'none' }}
+      >
+        View all automations
+        <ChevronRight className="w-3 h-3" />
+      </Link>
+    </div>
+  );
+}
+
 // ── Activity tab ─────────────────────────────────────────────────────────────
 
 function JobIcon({ status }: { status: JobStatus }) {
@@ -849,6 +1018,7 @@ export function ProjectContent({ projectId, workspaceId }: ProjectContentProps) 
       )}
       {tab === 'datasets' && <DatasetsTab projectId={projectId} />}
       {tab === 'annotations' && <AnnotationsTab />}
+      {tab === 'automations' && <AutomationsTab projectId={projectId} workspaceId={workspaceId} />}
       {tab === 'activity' && <ActivityTab />}
       {tab === 'members' && <MembersTab projectId={projectId} />}
     </div>

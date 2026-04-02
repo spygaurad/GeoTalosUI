@@ -69,6 +69,7 @@ export function DatasetItemsPanel({ datasetId, mapId }: DatasetItemsPanelProps) 
         layer_type: 'raster',
         source_type: 'stac_item',
         stac_item_id: item.stac_item_id,
+        source_config: { dataset_id: datasetId },
         visible: true,
         opacity: 1.0,
       });
@@ -81,11 +82,14 @@ export function DatasetItemsPanel({ datasetId, mapId }: DatasetItemsPanelProps) 
       });
       setBackendLayerId(layerId, bl.id);
 
-      // 3. Fetch tile URL template (integration guide §3C)
+      // 3. Fetch tile URL template + rendering config
       try {
         const cfg = await datasetsApi.getItemTileConfig(datasetId, item.id);
         if (cfg.tile_url_template) {
           setLayerTileConfig(layerId, { tileUrl: cfg.tile_url_template });
+        }
+        if (cfg.rendering_config) {
+          useMapLayersStore.getState().setLayerRenderingConfig(layerId, cfg.rendering_config);
         }
       } catch {
         // Tile config not available yet

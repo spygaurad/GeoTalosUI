@@ -41,7 +41,6 @@ const SECTIONS = [
     items: [
       { title: 'AI Models', href: '/models', icon: Bot },
       { title: 'Inference', href: '/inference', icon: Zap },
-      { title: 'Automations', href: '/automations', icon: Bell, badge: '2' },
     ],
   },
   {

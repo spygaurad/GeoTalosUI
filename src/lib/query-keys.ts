@@ -28,6 +28,7 @@ export const qk = {
   },
 
   annotationSets: {
+    listByProject: (projectId: string) => ['annotation-sets', 'project', projectId] as const,
     listByMap: (mapId: string) => ['annotation-sets', 'map', mapId] as const,
     detail: (id: string) => ['annotation-sets', id] as const,
     features: (id: string) => ['annotation-sets', id, 'features'] as const,
@@ -81,5 +82,15 @@ export const qk = {
   mapLayers: {
     refs: (projectId: string) => ['mapLayers', 'refs', projectId] as const,
     refData: (refId: string) => ['mapLayers', 'refData', refId] as const,
+  },
+  automation: {
+    nodeCatalog: () => ['automation', 'node-catalog'] as const,
+    pipelines: (params?: Record<string, unknown>) => ['automation', 'pipelines', params] as const,
+    pipelineDetail: (id: string) => ['automation', 'pipelines', id] as const,
+    pipelineRuns: (pipelineId: string) => ['automation', 'pipelines', pipelineId, 'runs'] as const,
+    runDetail: (runId: string) => ['automation', 'runs', runId] as const,
+    runSteps: (runId: string) => ['automation', 'runs', runId, 'steps'] as const,
+    runStepDetail: (runId: string, stepId: string) =>
+      ['automation', 'runs', runId, 'steps', stepId] as const,
   },
 } as const;

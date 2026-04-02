@@ -168,7 +168,7 @@ function AddToMapModal({
     mutationFn: async (map: ProjectMap) => {
       await datasetsApi.addMapLayer(map.id, {
         name: dataset.name,
-        layer_type: dataset.dataset_type,
+        layer_type: 'raster', // Datasets are always raster (COG imagery)
         source_type: 'dataset',
         dataset_id: dataset.id,
         opacity: 1.0,

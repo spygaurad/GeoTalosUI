@@ -1,8 +1,11 @@
 'use client';
 
+import { useState } from 'react';
 import { toast } from 'sonner';
+import { Trash2 } from 'lucide-react';
 import type { SelectedFeature } from '@/features/maps/types';
 import { getFeatureConfig, type PropertySchema } from '@/features/maps/featureRegistry';
+import { useMapLayersStore } from '@/stores/mapLayersStore';
 import { MC } from '../../mapColors';
 
 // ── Value formatters ──────────────────────────────────────────────────────────
@@ -110,6 +113,37 @@ export interface FeaturePropertiesPanelProps {
 }
 
 export function FeaturePropertiesPanel({ feature }: FeaturePropertiesPanelProps) {
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+
+  // Annotation delete support
+  const annotationSetId = feature.properties._annotation_set_id as string | undefined;
+  const annotationId = feature.properties._annotation_id as string | undefined;
+  const canDelete = !!annotationSetId && !!annotationId;
+
+  const handleDeleteAnnotation = async () => {
+    if (!annotationSetId || !annotationId) return;
+    if (!confirmDelete) {
+      setConfirmDelete(true);
+      setTimeout(() => setConfirmDelete(false), 3000);
+      return;
+    }
+    setDeleting(true);
+    try {
+      const { annotationSetsApi } = await import('@/lib/api/annotation-sets');
+      await annotationSetsApi.deleteFeature(annotationSetId, annotationId);
+      toast.success('Annotation deleted');
+      // Refresh the annotation set layer and close panel
+      useMapLayersStore.getState().requestAnnotationSetRefresh(annotationSetId);
+      useMapLayersStore.getState().closeRightPanel();
+    } catch {
+      toast.error('Failed to delete annotation');
+    } finally {
+      setDeleting(false);
+      setConfirmDelete(false);
+    }
+  };
+
   // Look up registry config; fall back to generic display if not registered
   const config = getFeatureConfig(feature.featureType);
   const typeLabel = config?.label ?? feature.featureType;
@@ -236,6 +270,40 @@ export function FeaturePropertiesPanel({ feature }: FeaturePropertiesPanelProps)
             Feature type <code style={{ fontSize: 10 }}>{feature.featureType}</code> is not registered.
           </div>
         ) : null}
+
+        {/* Delete annotation button */}
+        {canDelete && (
+          <div style={{
+            padding: '12px 14px',
+            borderTop: `1px solid ${MC.border}`,
+            marginTop: 'auto',
+          }}>
+            <button
+              onClick={handleDeleteAnnotation}
+              disabled={deleting}
+              style={{
+                width: '100%',
+                height: 32,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: 6,
+                fontSize: 12,
+                fontWeight: 600,
+                color: confirmDelete ? '#fff' : MC.danger,
+                background: confirmDelete ? MC.danger : `${MC.danger}12`,
+                border: `1px solid ${confirmDelete ? MC.danger : `${MC.danger}30`}`,
+                borderRadius: 6,
+                cursor: deleting ? 'wait' : 'pointer',
+                opacity: deleting ? 0.6 : 1,
+                transition: 'all 0.15s',
+              }}
+            >
+              <Trash2 size={13} />
+              {deleting ? 'Deleting…' : confirmDelete ? 'Click again to confirm' : 'Delete annotation'}
+            </button>
+          </div>
+        )}
       </div>
     </div>
   );

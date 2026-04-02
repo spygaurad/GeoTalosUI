@@ -52,6 +52,13 @@ export const DEFAULT_TILE_SERVICE_STYLE: LayerStyle = {
   radius: 6,
 };
 
+/** Band selection for RGB rendering — indices are 1-based band numbers */
+export interface BandSelection {
+  r: number;
+  g: number;
+  b: number;
+}
+
 export interface LayerConfig {
   id: string;
   /** Human-readable name (used in tooltips, legend). Falls back to id if not set. */
@@ -91,6 +98,12 @@ export interface LayerConfig {
   loading?: boolean;
   /** Error state — true when the layer has encountered persistent errors */
   error?: boolean;
+  /** Rendering config from titiler — band metadata, presets, etc. */
+  renderingConfig?: import('@/types/api').RenderingConfig | null;
+  /** Current band selection for RGB rendering (1-based indices) */
+  bandSelection?: BandSelection | null;
+  /** Current active rendering preset name */
+  activePreset?: string | null;
 }
 
 export interface SelectedFeature {
@@ -102,6 +115,8 @@ export interface SelectedFeature {
   latlng: [number, number];
   /** Reference to the actual Leaflet layer for live-style updates via registry applyUpdate */
   layerRef?: unknown;
+  /** ID of the parent layer in mapLayersStore (for left panel selection) */
+  layerId?: string;
 }
 
 // 'new-annotation' = user just drew a shape via Geoman, right panel shows attribute form

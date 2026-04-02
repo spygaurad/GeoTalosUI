@@ -15,11 +15,16 @@ interface AnnotationSetPanelProps {
 
 export function AnnotationSetPanel({ annotationSetId }: AnnotationSetPanelProps) {
   const openAnnotationPanel = useMapLayersStore((s) => s.openAnnotationPanel);
+  const layerId = `annset-${annotationSetId}`;
+  const layer = useMapLayersStore((s) => s.layers[layerId]);
+  const setLayerOpacity = useMapLayersStore((s) => s.setLayerOpacity);
 
   const { data: annSet, isLoading } = useQuery({
     queryKey: qk.annotationSets.detail(annotationSetId),
     queryFn: () => annotationSetsApi.get(annotationSetId),
     enabled: !!annotationSetId,
+    retry: 2,
+    retryDelay: 1000,
   });
 
   const { data: schema } = useQuery({
@@ -96,6 +101,25 @@ export function AnnotationSetPanel({ annotationSetId }: AnnotationSetPanelProps)
         <Section title="Classes">
           <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
             {renderClassTree(classes)}
+          </div>
+        </Section>
+      )}
+
+      {/* Layer opacity */}
+      {layer && (
+        <Section title="Opacity">
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <input
+              type="range" min={0} max={100}
+              value={Math.round(layer.opacity * 100)}
+              aria-label="Layer opacity"
+              aria-valuetext={`${Math.round(layer.opacity * 100)}%`}
+              onChange={(e) => setLayerOpacity(layerId, Number(e.target.value) / 100)}
+              style={{ flex: 1, accentColor: MC.accent, cursor: 'pointer' }}
+            />
+            <span style={{ fontSize: 11, color: MC.textMuted, width: 32, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
+              {Math.round(layer.opacity * 100)}%
+            </span>
           </div>
         </Section>
       )}
