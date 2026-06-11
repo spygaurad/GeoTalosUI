@@ -10,12 +10,12 @@ export default function TopNav() {
         {/* Left: Logo */}
         <Link href="/dashboard" className="flex items-center gap-2.5 group">
           <img
-            src="/AwakeForest_logo.png"
-            alt="AwakeForest"
+            src="/GeoTalos_logo.png"
+            alt="GeoTalos"
             className="h-7 w-auto object-contain"
           />
           <span className="font-semibold text-sm text-gray-900 group-hover:text-primary-600 transition-colors">
-            AwakeForest
+            GeoTalos
           </span>
         </Link>
 

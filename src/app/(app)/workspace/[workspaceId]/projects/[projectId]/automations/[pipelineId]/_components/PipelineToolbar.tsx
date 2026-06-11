@@ -15,7 +15,8 @@ import {
   X,
   History,
 } from 'lucide-react';
-import type { PipelineStatus } from '@/types/api';
+import type { PipelineStatus, NodeCatalogEntry } from '@/types/api';
+import { QuickAddMenu } from './QuickAddMenu';
 
 const STATUS_DOT: Record<PipelineStatus, string> = {
   active: '#656d4a',
@@ -36,6 +37,8 @@ interface PipelineToolbarProps {
   onZoomIn: () => void;
   onZoomOut: () => void;
   onFitView: () => void;
+  onQuickAdd?: (entry: NodeCatalogEntry) => void;
+  quickAddEntries?: NodeCatalogEntry[];
   isSaving?: boolean;
   isRunning?: boolean;
   showRuns?: boolean;
@@ -53,6 +56,8 @@ export function PipelineToolbar({
   onZoomIn,
   onZoomOut,
   onFitView,
+  onQuickAdd,
+  quickAddEntries,
   isSaving,
   isRunning,
   showRuns,
@@ -166,32 +171,37 @@ export function PipelineToolbar({
         </div>
       </div>
 
-      {/* Center — zoom controls */}
-      <div className="flex items-center gap-1">
-        <button
-          onClick={onZoomOut}
-          className="p-1.5 rounded-md transition-colors hover:bg-[#ede0d4]"
-          style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#7f5539' }}
-          title="Zoom out"
-        >
-          <ZoomOut className="w-3.5 h-3.5" />
-        </button>
-        <button
-          onClick={onZoomIn}
-          className="p-1.5 rounded-md transition-colors hover:bg-[#ede0d4]"
-          style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#7f5539' }}
-          title="Zoom in"
-        >
-          <ZoomIn className="w-3.5 h-3.5" />
-        </button>
-        <button
-          onClick={onFitView}
-          className="p-1.5 rounded-md transition-colors hover:bg-[#ede0d4]"
-          style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#7f5539' }}
-          title="Fit to view"
-        >
-          <Maximize2 className="w-3.5 h-3.5" />
-        </button>
+      {/* Center — zoom controls + quick add */}
+      <div className="flex items-center gap-2" onMouseDown={(e) => e.stopPropagation()}>
+        {onQuickAdd && quickAddEntries && quickAddEntries.length > 0 && (
+          <QuickAddMenu entries={quickAddEntries} onSelect={onQuickAdd} />
+        )}
+        <div className="flex items-center gap-1">
+          <button
+            onClick={onZoomOut}
+            className="p-1.5 rounded-md transition-colors hover:bg-[#ede0d4]"
+            style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#7f5539' }}
+            title="Zoom out"
+          >
+            <ZoomOut className="w-3.5 h-3.5" />
+          </button>
+          <button
+            onClick={onZoomIn}
+            className="p-1.5 rounded-md transition-colors hover:bg-[#ede0d4]"
+            style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#7f5539' }}
+            title="Zoom in"
+          >
+            <ZoomIn className="w-3.5 h-3.5" />
+          </button>
+          <button
+            onClick={onFitView}
+            className="p-1.5 rounded-md transition-colors hover:bg-[#ede0d4]"
+            style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#7f5539' }}
+            title="Fit to view"
+          >
+            <Maximize2 className="w-3.5 h-3.5" />
+          </button>
+        </div>
       </div>
 
       {/* Right */}

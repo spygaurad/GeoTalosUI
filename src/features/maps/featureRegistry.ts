@@ -126,8 +126,6 @@ registerFeatureType('annotation-rectangle', {
     { name: 'label',      label: 'Label',     ui: 'text', readOnly: true },
     { name: 'area',       label: 'Area',      ui: 'text', readOnly: true },
     { name: 'perimeter',  label: 'Perimeter', ui: 'text', readOnly: true },
-    { name: 'ns_span',    label: 'N–S span',  ui: 'text', readOnly: true },
-    { name: 'ew_span',    label: 'E–W span',  ui: 'text', readOnly: true },
     ...ANNOTATION_STYLE_SCHEMA,
   ],
   applyUpdate: pathApplyUpdate,

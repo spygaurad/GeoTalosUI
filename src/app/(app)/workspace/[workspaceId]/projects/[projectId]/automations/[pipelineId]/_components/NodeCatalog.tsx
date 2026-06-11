@@ -10,7 +10,7 @@ import {
   ArrowLeft,
 } from 'lucide-react';
 import type { NodeCatalogEntry, NodeCatalogCategory } from '@/types/api';
-import { CATEGORY_META } from '../../_constants';
+import { CATEGORY_META, HIGH_LEVEL_GROUPS, type HighLevelGroup } from '../../_constants';
 import { DISPLAY_CATEGORY } from './frontend-display-nodes';
 
 // ── Fixed-position tooltip (escapes overflow:hidden) ─────────────────────────
@@ -44,7 +44,9 @@ function useFixedTooltip(delay = 250) {
 
 function CatalogTooltip({ entry, x, y }: { entry: NodeCatalogEntry; x: number; y: number }) {
   const cat = CATEGORY_META[entry.category];
-  const entryColor = entry.color ?? cat?.color ?? '#f5ede0';
+  // Color by sub-category so every node in a category shares one color
+  // (ignore the per-node backend `entry.color`).
+  const entryColor = cat?.color ?? '#f5ede0';
   return (
     <div
       style={{
@@ -176,7 +178,9 @@ function CategoryTooltipFixed({ text, x, y }: { text: string; x: number; y: numb
 
 function CatalogItem({ entry }: { entry: NodeCatalogEntry }) {
   const cat = CATEGORY_META[entry.category];
-  const color = entry.color ?? cat?.color ?? '#f5ede0';
+  // Color by sub-category so every node in a category shares one color
+  // (ignore the per-node backend `entry.color`).
+  const color = cat?.color ?? '#f5ede0';
   const { show, pos, elRef, onEnter, onLeave } = useFixedTooltip(250);
 
   function onDragStart(e: DragEvent) {
@@ -317,6 +321,88 @@ function CategorySection({
   );
 }
 
+// ── High-level group section ────────────────────────────────────────────────
+
+function HighLevelGroupSection({
+  group,
+  subCategories,
+  defaultOpen,
+}: {
+  group: HighLevelGroup;
+  subCategories: NodeCatalogCategory[];
+  defaultOpen: boolean;
+}) {
+  const [open, setOpen] = useState(defaultOpen);
+  const { show: showTip, pos: tipPos, elRef: tipRef, onEnter: tipEnter, onLeave: tipLeave } = useFixedTooltip(200);
+
+  const totalCount = subCategories.reduce((sum, c) => sum + c.nodes.length, 0);
+
+  return (
+    <div className="mb-2">
+      <div ref={tipRef} onMouseEnter={tipEnter} onMouseLeave={tipLeave}>
+        <button
+          onClick={() => setOpen(!open)}
+          className="flex items-center justify-between w-full px-2 py-2 rounded-md transition-colors"
+          style={{
+            background: 'none',
+            border: 'none',
+            cursor: 'pointer',
+            color: group.color,
+            borderLeft: `2px solid ${group.color}`,
+            paddingLeft: '8px',
+          }}
+          onMouseEnter={(e) => {
+            (e.currentTarget as HTMLElement).style.backgroundColor = 'rgba(255,255,255,0.05)';
+          }}
+          onMouseLeave={(e) => {
+            (e.currentTarget as HTMLElement).style.backgroundColor = 'transparent';
+          }}
+        >
+          <span
+            style={{
+              fontSize: '11px',
+              fontWeight: 700,
+              textTransform: 'uppercase',
+              letterSpacing: '0.1em',
+            }}
+          >
+            {group.label}
+          </span>
+          <span
+            className="flex items-center gap-1"
+            style={{ fontSize: '10px', color: 'rgba(245,237,224,0.4)' }}
+          >
+            {totalCount}
+            {open ? (
+              <ChevronDown className="w-3 h-3" />
+            ) : (
+              <ChevronRight className="w-3 h-3" />
+            )}
+          </span>
+        </button>
+
+        {showTip && (
+          <CategoryTooltipFixed text={group.description} x={tipPos.x} y={tipPos.y} />
+        )}
+      </div>
+
+      {open && (
+        <div className="mt-1 pl-2">
+          {subCategories.map((cat) => (
+            <CategorySection
+              key={cat.name}
+              category={cat.name}
+              entries={cat.nodes}
+              defaultOpen={false}
+              categoryLabel={cat.label}
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── Main ────────────────────────────────────────────────────────────────────
 
 interface NodeCatalogProps {
@@ -337,7 +423,25 @@ export function NodeCatalog({ categories, isLoading, isError }: NodeCatalogProps
     DISPLAY_CATEGORY,
   ];
 
-  // Flatten for search, then re-group
+  const categoryByName = new Map(availableCategories.map((c) => [c.name, c]));
+
+  // Roll backend categories up into the 4 high-level groups, preserving
+  // sub-category order as declared in HIGH_LEVEL_GROUPS.
+  const groupedSubCategories: { group: HighLevelGroup; subCategories: NodeCatalogCategory[] }[] =
+    HIGH_LEVEL_GROUPS.map((group) => ({
+      group,
+      subCategories: group.categories
+        .map((catName) => categoryByName.get(catName))
+        .filter((c): c is NodeCatalogCategory => Boolean(c)),
+    })).filter((g) => g.subCategories.length > 0);
+
+  // Any backend category not mapped to a high-level group (e.g. a new
+  // category we haven't classified yet) falls into a residual bucket so
+  // it isn't silently hidden.
+  const mappedCategoryNames = new Set(HIGH_LEVEL_GROUPS.flatMap((g) => g.categories));
+  const unmappedCategories = availableCategories.filter((c) => !mappedCategoryNames.has(c.name));
+
+  // Flatten for search
   const allNodes = availableCategories.flatMap((c) => c.nodes);
 
   const filtered = search
@@ -446,16 +550,26 @@ export function NodeCatalog({ categories, isLoading, isError }: NodeCatalogProps
             );
           })()
         ) : (
-          // Normal: render in API category order (placeholder nodes hidden)
-          availableCategories.map((cat, i) => (
-            <CategorySection
-              key={cat.name}
-              category={cat.name}
-              entries={cat.nodes}
-              defaultOpen={i < 3}
-              categoryLabel={cat.label}
-            />
-          ))
+          // Normal: render the 4 high-level groups, each with its sub-categories
+          <>
+            {groupedSubCategories.map(({ group, subCategories }, i) => (
+              <HighLevelGroupSection
+                key={group.key}
+                group={group}
+                subCategories={subCategories}
+                defaultOpen={i < 2}
+              />
+            ))}
+            {unmappedCategories.map((cat) => (
+              <CategorySection
+                key={cat.name}
+                category={cat.name}
+                entries={cat.nodes}
+                defaultOpen={false}
+                categoryLabel={cat.label}
+              />
+            ))}
+          </>
         )}
 
         {!isLoading && availableCategories.length === 0 && !filtered && (
@@ -469,6 +583,17 @@ export function NodeCatalog({ categories, isLoading, isError }: NodeCatalogProps
             No nodes available.
           </p>
         )}
+      </div>
+
+      {/* ── Quick tips ── */}
+      <div
+        className="shrink-0 px-3 py-2 text-center"
+        style={{ borderTop: '1px solid rgba(255,255,255,0.07)', fontSize: '9px', color: 'rgba(245,237,224,0.5)' }}
+      >
+        <p style={{ marginBottom: '4px' }}>💡 Pro tips:</p>
+        <p style={{ marginBottom: '2px' }}>Drag items onto canvas</p>
+        <p style={{ marginBottom: '2px' }}>Right-click canvas to add</p>
+        <p>Use toolbar "Add" button</p>
       </div>
 
       {/* ── Recipe guide ── */}
@@ -487,22 +612,22 @@ const RECIPES: {
   {
     title: 'Overlay dataset on map',
     description: 'Add raster data as a map layer',
-    nodes: ['manual_trigger', 'select_dataset', 'overlay_dataset_on_map'],
+    nodes: ['trigger', 'select_data_source', 'overlay_dataset_on_map'],
   },
   {
     title: 'Export dataset items',
     description: 'Export items as downloadable GeoJSON',
-    nodes: ['manual_trigger', 'select_dataset_items', 'export_dataset_items'],
+    nodes: ['trigger', 'select_data_source', 'export_dataset_items'],
   },
   {
-    title: 'ML inference to map',
-    description: 'Run a model, display predictions on map',
-    nodes: ['select_dataset_items', 'select_model', 'run_inference', 'post_processing', 'create_annotation_set', 'overlay_on_map'],
+    title: 'Inference on an AOI',
+    description: 'Pick map + dataset + AOI, run a model, overlay results',
+    nodes: ['select_data_source', 'run_inference', 'overlay_on_map'],
   },
   {
     title: 'STAC search + AOI filter',
     description: 'Search catalog imagery, filter by area',
-    nodes: ['manual_trigger', 'stac_search', 'aoi_filter', 'export_dataset_items'],
+    nodes: ['trigger', 'stac_search', 'aoi_filter', 'export_dataset_items'],
   },
   {
     title: 'Ground truth QA',
@@ -522,7 +647,7 @@ const RECIPES: {
   {
     title: 'Scheduled monitoring',
     description: 'Weekly inference + area report via webhook',
-    nodes: ['schedule_trigger', 'select_dataset_items', 'select_model', 'run_inference', 'post_processing', 'create_annotation_set', 'area_calculation', 'send_webhook'],
+    nodes: ['trigger', 'select_data_source', 'run_inference', 'area_calculation', 'send_webhook'],
   },
   {
     title: 'Auto-overlay on ingest',
@@ -532,12 +657,12 @@ const RECIPES: {
   {
     title: 'Change detection alert',
     description: 'Detect changes between two dates, alert if threshold exceeded',
-    nodes: ['manual_trigger', 'select_dataset', 'select_dataset', 'change_detection', 'generate_report', 'send_email'],
+    nodes: ['trigger', 'select_annotation_set', 'select_annotation_set', 'change_detection', 'generate_report', 'send_email'],
   },
   {
-    title: 'Merge + style annotations',
-    description: 'Combine annotation sets, style on map',
-    nodes: ['select_annotation_set', 'select_annotation_set', 'merge_annotation_sets', 'overlay_on_map', 'style_assignment'],
+    title: 'Merge annotation sets',
+    description: 'Combine annotation sets, show on map',
+    nodes: ['select_annotation_set', 'select_annotation_set', 'merge_annotation_sets', 'overlay_on_map'],
   },
 ];
 

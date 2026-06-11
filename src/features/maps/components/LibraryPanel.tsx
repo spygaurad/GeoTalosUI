@@ -2,10 +2,15 @@
 
 import { useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import { X, Search, Database, Link, Upload, CheckCircle, Clock, AlertCircle, Loader, ArrowRight, Globe, Plus } from 'lucide-react';
+import { useQuery } from '@tanstack/react-query';
+import { X, Search, Database, Link, Upload, CheckCircle, Clock, AlertCircle, Loader, ArrowRight, Globe, Plus, Tags } from 'lucide-react';
 import { toast } from 'sonner';
-import type { Dataset } from '@/types/api';
+import type { Dataset, AnnotationSet, AnnotationClass } from '@/types/api';
 import { datasetsApi } from '@/lib/api/datasets';
+import { annotationSetsApi } from '@/lib/api/annotation-sets';
+import { annotationSchemasApi } from '@/lib/api/annotation-schemas';
+import { flyToAnnotationSet } from '../utils/annotationSetMap';
+import { buildClassStyles } from '../utils/annotationStyles';
 import { qk } from '@/lib/query-keys';
 import { useMapLayersStore } from '@/stores/mapLayersStore';
 import { useUploadStore } from '@/stores/uploadStore';
@@ -13,7 +18,7 @@ import { UploadWizard } from '@/features/datasets/components/UploadWizard';
 import { MC, MAP_Z } from '../mapColors';
 import { getMapInstance } from '@/stores/mapStore';
 
-type LibTab = 'datasets' | 'sources' | 'upload';
+type LibTab = 'datasets' | 'annotations' | 'sources' | 'upload';
 
 const STATUS_ICON: Record<string, React.ReactNode> = {
   ready:     <CheckCircle size={12} style={{ color: MC.success }} />,
@@ -48,6 +53,7 @@ export function LibraryPanel({
   const [adding, setAdding] = useState<string | null>(null);
   const initLayer = useMapLayersStore((s) => s.initLayer);
   const setBackendLayerId = useMapLayersStore((s) => s.setBackendLayerId);
+  const addAnnotationSetLayer = useMapLayersStore((s) => s.addAnnotationSetLayer);
   const layers = useMapLayersStore((s) => s.layers);
   const activeUpload = useUploadStore((s) => s.upload);
   const queryClient = useQueryClient();
@@ -80,7 +86,7 @@ export function LibraryPanel({
         visible: true,
       });
       setBackendLayerId(d.id, bl.id);
-      queryClient.invalidateQueries({ queryKey: ['map-layers', mapId] });
+      await queryClient.invalidateQueries({ queryKey: qk.maps.detail(mapId) });
 
       // 3. Cache rendering_config for child item layers
       const rc = d.metadata?.rendering_config;
@@ -216,8 +222,9 @@ export function LibraryPanel({
         {/* Tabs */}
         <div style={{ display: 'flex', borderBottom: `1px solid ${MC.border}`, flexShrink: 0 }}>
           {([
-            { id: 'datasets' as LibTab, label: 'Datasets', icon: <Database size={11} /> },
-            { id: 'sources' as LibTab,  label: 'Sources',  icon: <Link size={11} /> },
+            { id: 'datasets' as LibTab,    label: 'Rasters',     icon: <Database size={11} /> },
+            { id: 'annotations' as LibTab, label: 'Annotations', icon: <Tags size={11} /> },
+            { id: 'sources' as LibTab,     label: 'Sources',     icon: <Link size={11} /> },
             { id: 'upload' as LibTab,   label: 'Upload',   icon: <Upload size={11} />, badge: isUploadActive },
           ] as const).map((t) => (
             <button
@@ -451,6 +458,44 @@ export function LibraryPanel({
           </>
         )}
 
+        {/* ── Annotations tab — add annotation sets as vector layers ─ */}
+        {tab === 'annotations' && (
+          <AnnotationSetsTab
+            onAdd={async (s) => {
+              // First try embedded schema, then try the query cache
+              let schemaClasses =
+                s.schema?.classes ??
+                (s.schema_id
+                  ? queryClient.getQueryData<{ items: AnnotationClass[] }>(
+                      qk.annotationSchemas.classes(s.schema_id)
+                    )?.items
+                  : undefined);
+
+              // If schema classes not available from cache, fetch them now
+              if (!schemaClasses && s.schema_id) {
+                try {
+                  const resp = await annotationSchemasApi.getClasses(s.schema_id);
+                  schemaClasses = resp.items;
+                  // Cache for future use
+                  queryClient.setQueryData(qk.annotationSchemas.classes(s.schema_id), resp);
+                } catch {
+                  // Silently fail — will use default fallback colors
+                }
+              }
+
+              const layerId = addAnnotationSetLayer({
+                setId: s.id,
+                name: s.name,
+                classStyles: buildClassStyles(schemaClasses),
+              });
+              toast.success(`"${s.name}" added to map`);
+              // Async: fetch bounds, set pointer, fly to annotation location
+              void flyToAnnotationSet(layerId, s.id);
+            }}
+            isOnMap={(setId) => !!layers[`annset-${setId}`]}
+          />
+        )}
+
         {/* ── Sources tab — add external tile services ─────────── */}
         {tab === 'sources' && (
           <TileServiceTab mapId={mapId} />
@@ -463,6 +508,109 @@ export function LibraryPanel({
               onAddToMap={handleAddToMap}
             />
           </div>
+        )}
+      </div>
+    </>
+  );
+}
+
+// ── Annotation Sets Tab — list org sets, add as Martin MVT vector layers ─────
+function AnnotationSetsTab({
+  onAdd,
+  isOnMap,
+}: {
+  onAdd: (s: AnnotationSet) => void;
+  isOnMap: (setId: string) => boolean;
+}) {
+  const [query, setQuery] = useState('');
+  const setsQ = useQuery({
+    queryKey: ['annotation-sets', 'org', 'library'],
+    queryFn: () => annotationSetsApi.listByOrg(),
+  });
+  const items = (setsQ.data?.items ?? []).filter(
+    (s) => !query || s.name.toLowerCase().includes(query.toLowerCase()),
+  );
+
+  return (
+    <>
+      <div style={{ padding: '10px 12px', borderBottom: `1px solid ${MC.border}`, flexShrink: 0 }}>
+        <div
+          style={{
+            display: 'flex', alignItems: 'center', gap: 6,
+            background: MC.inputBg, borderRadius: 6, padding: '6px 10px',
+            border: `1px solid ${MC.inputBorder}`,
+          }}
+        >
+          <Search size={12} style={{ color: MC.textMuted, flexShrink: 0 }} />
+          <input
+            type="text"
+            placeholder="Search annotation sets…"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            style={{
+              flex: 1, background: 'transparent', border: 'none', outline: 'none',
+              color: MC.text, fontSize: 13,
+            }}
+          />
+        </div>
+      </div>
+      <div style={{ flex: 1, overflowY: 'auto', minHeight: 0 }}>
+        {setsQ.isLoading ? (
+          <div style={{ padding: 24, textAlign: 'center', fontSize: 12, color: MC.textMuted }}>
+            Loading…
+          </div>
+        ) : items.length === 0 ? (
+          <div style={{ padding: '32px 20px', fontSize: 13, color: MC.textMuted, textAlign: 'center', fontStyle: 'italic' }}>
+            {query ? `No sets matching "${query}"` : 'No annotation sets yet.'}
+          </div>
+        ) : (
+          items.map((s) => {
+            const onMap = isOnMap(s.id);
+            return (
+              <div
+                key={s.id}
+                style={{
+                  padding: '11px 14px',
+                  borderBottom: `1px solid ${MC.border}`,
+                  display: 'flex', gap: 10, alignItems: 'flex-start',
+                }}
+              >
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 3 }}>
+                    <Tags size={12} style={{ color: MC.accent, flexShrink: 0 }} />
+                    <span
+                      style={{
+                        fontSize: 13, fontWeight: 600, color: MC.text,
+                        overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                      }}
+                      title={s.name}
+                    >
+                      {s.name}
+                    </span>
+                  </div>
+                  <div style={{ fontSize: 11, color: MC.textMuted }}>
+                    {s.schema?.name ?? 'no schema'}
+                    {typeof s.annotation_count === 'number' && ` · ${s.annotation_count} features`}
+                    {s.stac_item_id && ' · attached to item'}
+                  </div>
+                </div>
+                <button
+                  onClick={() => !onMap && onAdd(s)}
+                  disabled={onMap}
+                  style={{
+                    flexShrink: 0, height: 28, padding: '0 10px', borderRadius: 5,
+                    border: `1px solid ${onMap ? MC.borderLight : MC.accent}`,
+                    background: onMap ? 'transparent' : MC.accentDim,
+                    color: onMap ? MC.textMuted : MC.accent,
+                    cursor: onMap ? 'default' : 'pointer',
+                    fontSize: 11, fontWeight: 700, whiteSpace: 'nowrap',
+                  }}
+                >
+                  {onMap ? 'On map' : 'Add'}
+                </button>
+              </div>
+            );
+          })
         )}
       </div>
     </>
@@ -515,6 +663,7 @@ function TileServiceTab({ mapId }: { mapId?: string }) {
     try {
       // Init in store
       initLayer(layerId, 'dataset', {
+        name: displayName,
         sourceType: 'tile_service',
         tileServiceUrl: tileUrl,
       });

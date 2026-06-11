@@ -1,10 +1,11 @@
 'use client';
 
-import { useCallback, useEffect } from 'react';
+import { useCallback, useEffect, useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { Calendar, FileImage, Layers, Info, Database } from 'lucide-react';
+import { Calendar, FileImage, Layers, Info, Database, Play } from 'lucide-react';
 import { useMapLayersStore } from '@/stores/mapLayersStore';
 import { datasetsApi } from '@/lib/api/datasets';
+import { stacApi } from '@/lib/api/stac';
 import { qk } from '@/lib/query-keys';
 import type { LayerType, BandSelection } from '@/features/maps/types';
 import { MC } from '../../mapColors';
@@ -15,26 +16,43 @@ export interface LayerStylePanelProps {
   layerType: LayerType;
 }
 
+// Opaque machine ids we never want surfaced as a human label: UUIDs and the
+// 32-char hex STAC item ids.
+const ID_RE = /^(?:[0-9a-f]{32}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i;
+const looksLikeId = (s?: string | null): boolean => !!s && ID_RE.test(s);
+
 export function LayerStylePanel({ layerId, layerType }: LayerStylePanelProps) {
   const layer = useMapLayersStore((s) => s.layers[layerId]);
   const setLayerStyle = useMapLayersStore((s) => s.setLayerStyle);
   const setLayerOpacity = useMapLayersStore((s) => s.setLayerOpacity);
   const setLayerBandSelection = useMapLayersStore((s) => s.setLayerBandSelection);
   const setLayerTileConfig = useMapLayersStore((s) => s.setLayerTileConfig);
+  const bumpAoiRenderVersion = useMapLayersStore((s) => s.bumpAoiRenderVersion);
+  const openAoiTimeline = useMapLayersStore((s) => s.openAoiTimeline);
+  const aoiTimelineEnabled = useMapLayersStore((s) => s.aoiTimelineEnabled);
 
   // Only stac_item layers are raster (datasets are collection containers, not data)
   const isRasterLayer = layer?.sourceType === 'stac_item';
   const parentDatasetId = layer?.parentDatasetId;
   const stacItemId = layer?.stacItemId;
+  
+  // Check if this is an AOI child layer (has parentAoiId set)
+  const isAoiChildLayer = !!layer?.parentAoiId;
+  const parentAoiId = layer?.parentAoiId;
+  const sourceDatasetId = layer?.sourceDatasetId;
+  const aoiStacCollectionId = layer?.stacCollectionId;
 
-  // For stac_item layers, we need the parent dataset ID to fetch tile config
-  const datasetIdForTiles = parentDatasetId ?? null;
+  // For tile config API calls, use the actual dataset UUID
+  // AOI child layers use sourceDatasetId, regular stac_item layers use parentDatasetId
+  const datasetIdForTiles = isAoiChildLayer ? sourceDatasetId : parentDatasetId;
+  const layerDatasetId = layer?.type === 'dataset' ? (layer.sourceDatasetId ?? layerId) : null;
+  const metadataDatasetId = isAoiChildLayer ? sourceDatasetId : (parentDatasetId ?? layerDatasetId);
 
   // Fetch parent dataset metadata for raster info (CRS, GSD, type, etc.)
   const { data: parentDataset } = useQuery({
-    queryKey: qk.datasets.detail(parentDatasetId ?? ''),
-    queryFn: () => datasetsApi.get(parentDatasetId!),
-    enabled: !!parentDatasetId,
+    queryKey: qk.datasets.detail(metadataDatasetId ?? ''),
+    queryFn: () => datasetsApi.get(metadataDatasetId!),
+    enabled: !!metadataDatasetId,
     staleTime: 5 * 60 * 1000,
   });
 
@@ -47,6 +65,53 @@ export function LayerStylePanel({ layerId, layerType }: LayerStylePanelProps) {
   });
 
   const item = items?.items?.find((i) => i.stac_item_id === stacItemId);
+  const stacCollectionId = layer?.stacCollectionId ?? parentDataset?.stac_collection_id ?? null;
+  const bboxStr = layer?.clipBounds ? layer.clipBounds.join(',') : undefined;
+
+  const { data: stylePanelStacItems, isLoading: stacItemsLoading } = useQuery({
+    queryKey: ['style-panel', 'stac-items', layerId, stacCollectionId, bboxStr],
+    queryFn: () => stacApi.listCollectionItems(stacCollectionId!, { bbox: bboxStr, limit: 200 }),
+    enabled: !!stacCollectionId && !!layerDatasetId,
+    staleTime: 60_000,
+  });
+
+  const datasetItemsByStacId = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const it of items?.items ?? []) {
+      if (it.stac_item_id && it.datetime) {
+        map.set(it.stac_item_id, it.datetime);
+      }
+    }
+    return map;
+  }, [items]);
+
+  // stac_item_id → original filename, so timestamp rows show a readable
+  // secondary label instead of the raw item id.
+  const filenamesByStacId = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const it of items?.items ?? []) {
+      const fname = it.filename?.trim();
+      if (it.stac_item_id && fname) map.set(it.stac_item_id, fname);
+    }
+    return map;
+  }, [items]);
+
+  const stacTimestamps = useMemo(() => {
+    const features = stylePanelStacItems?.features ?? [];
+    return features
+      .map((f) => {
+        // Try multiple datetime sources in order of preference
+        const dt = 
+          f.properties?.datetime || 
+          f.properties?.start_datetime || 
+          f.properties?.created ||
+          f.properties?.acquired ||
+          datasetItemsByStacId.get(f.id);
+        return { id: f.id, datetime: dt };
+      })
+      .filter((it): it is { id: string; datetime: string } => Boolean(it.datetime))
+      .sort((a, b) => new Date(a.datetime).getTime() - new Date(b.datetime).getTime());
+  }, [stylePanelStacItems, datasetItemsByStacId]);
 
   // Backfill renderingConfig from parent dataset metadata if not yet set on this layer
   useEffect(() => {
@@ -57,9 +122,18 @@ export function LayerStylePanel({ layerId, layerType }: LayerStylePanelProps) {
     }
   }, [parentDataset, layer?.renderingConfig, layerId]);
 
-  // ── Band selection handlers (fetch new TileJSON from API) ─────────────────
+  // ── Band selection handlers ────────────────────────────────────────────────
+  // AOI child layers: update store + bump render version so the AOI sync
+  // re-applies the current frame with new band params (no separate API call needed).
+  // Regular stac_item layers: fetch new tile config from API as before.
   const handleBandChange = useCallback(async (bands: BandSelection, preset?: string | null) => {
     setLayerBandSelection(layerId, bands, preset);
+
+    if (isAoiChildLayer) {
+      // Trigger AOI sync to re-render current frame with new bands
+      bumpAoiRenderVersion();
+      return;
+    }
 
     if (!datasetIdForTiles) return;
     const state = useMapLayersStore.getState();
@@ -77,25 +151,23 @@ export function LayerStylePanel({ layerId, layerType }: LayerStylePanelProps) {
     }
 
     try {
-      if (stacItemId && parentDatasetId) {
-        const tc = await datasetsApi.getItemTileConfigByStacId(parentDatasetId, stacItemId);
-        // Build query string manually to avoid URL() encoding {z}/{x}/{y} placeholders
+      if (stacItemId && datasetIdForTiles) {
+        const tc = await datasetsApi.getItemTileConfigByStacId(datasetIdForTiles, stacItemId);
         const params = new URLSearchParams();
         params.set('asset_bidx', assetBidx);
         if (rescale) params.set('rescale', rescale);
         const tileUrl = `${tc.tile_url_template}?${params.toString()}`;
-
         setLayerTileConfig(layerId, { tileUrl });
       }
     } catch (err) {
       console.error('Failed to update band selection:', err);
     }
-  }, [layerId, datasetIdForTiles, stacItemId, parentDatasetId, setLayerBandSelection, setLayerTileConfig]);
+  }, [layerId, isAoiChildLayer, datasetIdForTiles, stacItemId, setLayerBandSelection, setLayerTileConfig, bumpAoiRenderVersion]);
 
   const handlePresetChange = useCallback(async (presetId: string) => {
     const state = useMapLayersStore.getState();
     const targetLayer = state.layers[layerId];
-    if (!targetLayer?.tileUrl || !datasetIdForTiles) return;
+    if (!targetLayer?.tileUrl) return;
 
     const rc = targetLayer.renderingConfig;
     if (!rc?.presets?.[presetId]) return;
@@ -108,14 +180,20 @@ export function LayerStylePanel({ layerId, layerType }: LayerStylePanelProps) {
 
     setLayerBandSelection(layerId, bands, presetId);
 
+    if (isAoiChildLayer) {
+      bumpAoiRenderVersion();
+      return;
+    }
+
+    if (!datasetIdForTiles) return;
     try {
-      if (stacItemId && parentDatasetId) {
-        const tc = await datasetsApi.getItemTileConfigByStacId(parentDatasetId, stacItemId);
-        // Build query string manually to avoid URL() encoding {z}/{x}/{y} placeholders
+      if (stacItemId && datasetIdForTiles) {
+        const tc = await datasetsApi.getItemTileConfigByStacId(datasetIdForTiles, stacItemId);
         const params = new URLSearchParams();
         if (preset.params.asset_bidx) params.set('asset_bidx', preset.params.asset_bidx);
         if (preset.params.rescale) params.set('rescale', preset.params.rescale);
         if (preset.params.colormap_name) params.set('colormap_name', preset.params.colormap_name);
+        if (preset.params.colormap) params.set('colormap', preset.params.colormap);
         const qs = params.toString();
         const tileUrl = qs ? `${tc.tile_url_template}?${qs}` : tc.tile_url_template;
         setLayerTileConfig(layerId, { tileUrl });
@@ -123,7 +201,19 @@ export function LayerStylePanel({ layerId, layerType }: LayerStylePanelProps) {
     } catch (err) {
       console.error('Failed to apply preset:', err);
     }
-  }, [layerId, datasetIdForTiles, stacItemId, parentDatasetId, setLayerBandSelection, setLayerTileConfig]);
+  }, [layerId, isAoiChildLayer, datasetIdForTiles, stacItemId, setLayerBandSelection, setLayerTileConfig, bumpAoiRenderVersion]);
+
+  // Handle starting temporal analysis for AOI child layer
+  const handleStartTemporalAnalysis = useCallback(() => {
+    if (!parentAoiId || !sourceDatasetId || !aoiStacCollectionId) return;
+    
+    // Build collection map with just this dataset
+    const collectionMap: Record<string, string> = {
+      [sourceDatasetId]: aoiStacCollectionId,
+    };
+    
+    openAoiTimeline(parentAoiId, [sourceDatasetId], collectionMap);
+  }, [parentAoiId, sourceDatasetId, aoiStacCollectionId, openAoiTimeline]);
 
   if (!layer) {
     return (
@@ -148,6 +238,22 @@ export function LayerStylePanel({ layerId, layerType }: LayerStylePanelProps) {
     }
   };
 
+  const formatDateTime = (dateStr?: string | null) => {
+    if (!dateStr) return null;
+    try {
+      return new Date(dateStr).toLocaleString(undefined, {
+        year: 'numeric',
+        month: 'short',
+        day: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+      });
+    } catch {
+      return dateStr;
+    }
+  };
+
   // Derive dataset metadata from parent or from the dataset itself
   const dsMeta = parentDataset?.metadata;
 
@@ -159,7 +265,7 @@ export function LayerStylePanel({ layerId, layerType }: LayerStylePanelProps) {
           {isRasterLayer ? 'Raster Layer' : 'Layer Style'}
         </div>
         <div style={{ fontSize: 13, fontWeight: 600, color: MC.text, marginTop: 2 }}>
-          {layer.name || layerId}
+          {(!looksLikeId(layer.name) && layer.name) || item?.filename || parentDataset?.name || (isRasterLayer ? 'Raster layer' : 'Layer')}
         </div>
         {parentDataset && (
           <div style={{ fontSize: 10, color: MC.textMuted, marginTop: 2 }}>
@@ -169,8 +275,78 @@ export function LayerStylePanel({ layerId, layerType }: LayerStylePanelProps) {
         )}
       </div>
 
+      {/* Temporal Analysis Button for AOI child layers */}
+      {isAoiChildLayer && sourceDatasetId && aoiStacCollectionId && (
+        <div style={{ padding: '8px 12px', borderBottom: `1px solid ${MC.border}`, flexShrink: 0 }}>
+          <button
+            onClick={handleStartTemporalAnalysis}
+            disabled={aoiTimelineEnabled}
+            style={{
+              display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
+              width: '100%',
+              padding: '10px 14px', borderRadius: 6,
+              background: aoiTimelineEnabled ? MC.border : MC.accent,
+              border: 'none',
+              color: aoiTimelineEnabled ? MC.textMuted : '#fff',
+              fontSize: 12, fontWeight: 700,
+              cursor: aoiTimelineEnabled ? 'not-allowed' : 'pointer',
+              transition: 'all 0.15s',
+            }}
+          >
+            <Play size={13} />
+            {aoiTimelineEnabled ? 'Timeline Active' : 'View Temporal Analysis'}
+          </button>
+        </div>
+      )}
+
       {/* Content */}
       <div style={{ flex: 1, overflowY: 'auto', padding: '12px' }}>
+        {!!layerDatasetId && (
+          <div style={{ marginBottom: 12 }}>
+            <SectionHeader
+              label={`STAC Item Timestamps (${stacTimestamps.length})`}
+              icon={<Calendar size={11} />}
+            />
+            <div
+              style={{
+                border: `1px solid ${MC.border}`,
+                borderRadius: 6,
+                background: MC.inputBg,
+                maxHeight: 180,
+                overflowY: 'auto',
+              }}
+            >
+              {stacItemsLoading ? (
+                <div style={{ padding: '8px 10px', fontSize: 10, color: MC.textMuted }}>
+                  Loading timestamps…
+                </div>
+              ) : stacTimestamps.length === 0 ? (
+                <div style={{ padding: '8px 10px', fontSize: 10, color: MC.textMuted }}>
+                  No timestamps found for this layer.
+                </div>
+              ) : (
+                stacTimestamps.map((it, idx) => (
+                  <div
+                    key={`${it.id}-${idx}`}
+                    style={{
+                      padding: '6px 10px',
+                      borderBottom: idx === stacTimestamps.length - 1 ? 'none' : `1px solid ${MC.border}`,
+                    }}
+                  >
+                    <div title={it.id} style={{ fontSize: 10, color: MC.text, fontVariantNumeric: 'tabular-nums' }}>
+                      {idx + 1}. {formatDateTime(it.datetime)}
+                    </div>
+                    {filenamesByStacId.get(it.id) && (
+                      <div style={{ fontSize: 9, color: MC.textMuted, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {filenamesByStacId.get(it.id)}
+                      </div>
+                    )}
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+        )}
 
         {/* ── Raster Layer ── */}
         {isRasterLayer && (
@@ -185,9 +361,6 @@ export function LayerStylePanel({ layerId, layerType }: LayerStylePanelProps) {
                 {item.filename && (
                   <MetaRow icon={<FileImage size={11} />} label="File" value={item.filename} />
                 )}
-                <MetaRow label="STAC ID" value={
-                  <span style={{ fontFamily: 'monospace', fontSize: 9 }}>{stacItemId}</span>
-                } />
               </div>
             )}
 
@@ -207,7 +380,8 @@ export function LayerStylePanel({ layerId, layerType }: LayerStylePanelProps) {
                 )}
                 {rc && (
                   <>
-                    <MetaRow label="Bands" value={`${rc.band_count} (${rc.dtype})`} />
+                    <MetaRow label="Bands" value={String(rc.band_count)} />
+                    <MetaRow label="Data type" value={rc.dtype} />
                     <MetaRow label="Category" value={rc.data_category} />
                     {rc.nodata_value != null && (
                       <MetaRow label="NoData" value={String(rc.nodata_value)} />

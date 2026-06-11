@@ -4,6 +4,10 @@ import React, { useMemo } from 'react';
 import dynamic from 'next/dynamic';
 import type { AnnotationClass } from '@/types/api';
 import { useAnnotationSetFeatures } from '@/features/maps/hooks/useAnnotations';
+import {
+  extractClassIdFromProperties,
+  normalizeClassStyleDefinition,
+} from '@/features/maps/utils/annotationStyles';
 
 // Dynamically import Leaflet GeoJSON since it requires browser globals
 const GeoJSON = dynamic(() => import('react-leaflet').then((m) => m.GeoJSON), {
@@ -30,36 +34,46 @@ export function AnnotationLayer({
   onFeatureClick,
 }: AnnotationLayerProps) {
   const { data: geoJsonData, isLoading, error } = useAnnotationSetFeatures(annotationSetId);
+  const classList = useMemo(() => Object.values(schemaClasses), [schemaClasses]);
+  const resolveClass = useMemo(() => {
+    return (classRef: string | undefined) => {
+      if (!classRef) return null;
+      const byId = schemaClasses[classRef];
+      if (byId) return byId;
+      const alias = classRef.trim().toLowerCase();
+      return classList.find((c) => c.name.toLowerCase() === alias || c.path?.toLowerCase() === alias) ?? null;
+    };
+  }, [classList, schemaClasses]);
 
   // Style function that maps feature class to style
   const styleFunction = useMemo(() => {
     return (feature: any) => {
-      const classId = feature?.properties?.class_id;
-      const annotationClass = classId ? schemaClasses[classId] : null;
-      const fillColor = (annotationClass?.style?.definition?.fillColor as string) ?? '#ff0000';
-      const strokeColor = (annotationClass?.style?.definition?.strokeColor as string) ?? '#800000';
+      const classRef = extractClassIdFromProperties(feature?.properties as Record<string, unknown> | undefined);
+      const annotationClass = resolveClass(classRef);
+      const style = normalizeClassStyleDefinition(annotationClass?.style?.definition as Record<string, unknown> | undefined);
 
       return {
-        fillColor,
-        color: strokeColor,
-        weight: (annotationClass?.style?.definition?.strokeWidth as number) ?? 2,
+        fillColor: style.fillColor,
+        color: style.strokeColor,
+        weight: style.strokeWidth,
         opacity: 0.8,
-        fillOpacity: (annotationClass?.style?.definition?.fillOpacity as number) ?? 0.7,
+        fillOpacity: style.fillOpacity,
       };
     };
-  }, [schemaClasses]);
+  }, [resolveClass]);
 
   // Event handlers
   const onEachFeature = (feature: any, layer: any) => {
     const featureId = feature.id;
-    const classId = feature.properties?.class_id;
+    const classRef = extractClassIdFromProperties(feature.properties as Record<string, unknown> | undefined);
+    const annotationClass = resolveClass(classRef);
 
     layer.on('click', () => {
-      onFeatureClick?.(featureId, classId);
+      onFeatureClick?.(featureId, annotationClass?.id ?? classRef ?? '');
     });
 
     // Add popup with feature info
-    const className = schemaClasses[classId]?.name ?? 'Unknown';
+    const className = annotationClass?.name ?? 'Unknown';
     const confidence = feature.properties?.confidence;
     let popupContent = `<strong>${className}</strong>`;
     if (confidence !== null && confidence !== undefined) {
@@ -78,19 +92,19 @@ export function AnnotationLayer({
       style={styleFunction}
       onEachFeature={onEachFeature}
       pointToLayer={(feature, latlng) => {
-        const classId = feature.properties?.class_id;
-        const annotationClass = classId ? schemaClasses[classId] : null;
-        const fillColor = (annotationClass?.style?.definition?.fillColor as string) ?? '#ff0000';
+        const classRef = extractClassIdFromProperties(feature.properties as Record<string, unknown> | undefined);
+        const annotationClass = resolveClass(classRef);
+        const style = normalizeClassStyleDefinition(annotationClass?.style?.definition as Record<string, unknown> | undefined);
 
         // Use Leaflet's CircleMarker for point features
-        const { L } = require('leaflet');
+        const L = require('leaflet') as typeof import('leaflet');
         return new L.CircleMarker(latlng, {
           radius: 6,
-          fillColor,
-          color: (annotationClass?.style?.definition?.strokeColor as string) ?? '#800000',
-          weight: 2,
+          fillColor: style.fillColor,
+          color: style.strokeColor,
+          weight: style.strokeWidth,
           opacity: 0.8,
-          fillOpacity: 0.7,
+          fillOpacity: style.fillOpacity,
         });
       }}
     />

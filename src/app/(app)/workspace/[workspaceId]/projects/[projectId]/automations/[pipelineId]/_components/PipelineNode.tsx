@@ -1,6 +1,6 @@
 'use client';
 
-import { memo, useCallback, useState } from 'react';
+import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { Handle, Position, type NodeProps, useReactFlow } from '@xyflow/react';
 import { useQuery } from '@tanstack/react-query';
 import {
@@ -48,16 +48,22 @@ import {
   ToggleLeft,
   Monitor,
   Code2,
+  Shapes,
+  Grid2x2,
+  Ruler,
   type LucideIcon,
 } from 'lucide-react';
 import { CATEGORY_META } from '../../_constants';
 import { usePipelineContext } from './PipelineContext';
 import { isDisplayNode } from './frontend-display-nodes';
-import { DisplayNodeContent } from './DisplayNodeContent';
+import { DisplayNodeContent, ReportViewer } from './DisplayNodeContent';
 import { datasetsApi } from '@/lib/api/datasets';
 import { mapsApi } from '@/lib/api/maps';
 import { modelsApi } from '@/lib/api/models';
 import { annotationSetsApi } from '@/lib/api/annotation-sets';
+import { annotationSchemasApi } from '@/lib/api/annotation-schemas';
+import { stylesApi } from '@/lib/api/annotation-styles';
+import { mapAoisApi } from '@/lib/api/map-aois';
 import { qk } from '@/lib/query-keys';
 import type { HandleDef } from '@/types/api';
 
@@ -65,21 +71,18 @@ import type { HandleDef } from '@/types/api';
 
 const NODE_ICONS: Record<string, LucideIcon> = {
   // Triggers
-  manual_trigger: Hand,
-  schedule_trigger: Calendar,
+  trigger: Hand,
   dataset_ingested_trigger: Zap,
   annotation_created_trigger: PenTool,
   threshold_breach_trigger: AlertTriangle,
   // Data sources
-  select_dataset: Database,
-  select_dataset_items: Filter,
+  select_data_source: Database,
   select_annotation_set: Tags,
   stac_search: Search,
-  select_model: Bot,
+  search_map_aoi_resources: Search,
+  load_saved_map_aoi_timeline: Clock,
   // ML / Annotation
   run_inference: Play,
-  post_processing: Wand2,
-  create_annotation_set: PenTool,
   cascading_models: Brain,
   active_learning_selector: Target,
   // Analysis
@@ -99,10 +102,12 @@ const NODE_ICONS: Record<string, LucideIcon> = {
   // Output
   overlay_on_map: Map,
   overlay_dataset_on_map: Layers,
+  aggregate_model_runs: Combine,
+  multi_model_iou_comparison: GitCompare,
   before_after_comparison: ArrowRightLeft,
+  generate_report: FileText,
   export_annotations: Download,
   export_dataset_items: Download,
-  generate_report: FileText,
   send_email: Mail,
   send_webhook: Webhook,
   in_app_notification: Bell,
@@ -113,10 +118,13 @@ const NODE_ICONS: Record<string, LucideIcon> = {
   area_calculation: Calculator,
   duplicate_detection: Target,
   spatial_rule_checker: Shield,
-  style_assignment: PenTool,
   aoi_filter: Filter,
   review_queue: ListChecks,
   status_transition: ToggleLeft,
+  vectorize_raster_mask: Shapes,
+  rasterize_annotation_set: Grid2x2,
+  // Quality / IoU
+  raster_mask_metrics: Ruler,
   // Advanced
   multi_sensor_fusion: Combine,
   cloud_masking: Cloud,
@@ -151,6 +159,7 @@ const HANDLE_COLORS: Record<string, string> = {
   quality_metrics: '#c49ac4',
   stats_report: '#b0a0c4',
   map_layer: '#7fb07f',
+  map_selection: '#3B82F6',
   download_url: '#b0a090',
   tracked_objects: '#06B6D4',
   string: '#6B7280',
@@ -181,9 +190,16 @@ export interface PipelineNodeData {
 
 // ── Entity Picker (x-picker dropdowns) ────────────────────────────────────────
 
+type PickerItem = { id: string; name: string };
+type PickerResult = { data: { items?: PickerItem[] } | undefined; isLoading: boolean };
+
 const PICKER_CONFIG: Record<string, {
   label: string;
-  useItems: (projectId: string) => { data: { items?: Array<{ id: string; name: string }> } | undefined; isLoading: boolean };
+  multi?: boolean;
+  /** Name of another config field this picker depends on (e.g. dataset_items
+   *  needs dataset_id selected first). Without a value the query is skipped. */
+  dependsOn?: string;
+  useItems: (projectId: string, dependentValue?: string) => PickerResult;
 }> = {
   dataset: {
     label: 'Dataset',
@@ -193,7 +209,26 @@ const PICKER_CONFIG: Record<string, {
         queryFn: () => datasetsApi.list({ project_id: projectId, status: 'ready' }),
         staleTime: 30_000,
       });
-      return { data: data as { items?: Array<{ id: string; name: string }> } | undefined, isLoading };
+      return { data: data as { items?: PickerItem[] } | undefined, isLoading };
+    },
+  },
+  dataset_items: {
+    label: 'Dataset Items',
+    multi: true,
+    dependsOn: 'dataset_id',
+    useItems: (_projectId, datasetId) => {
+      const { data, isLoading } = useQuery({
+        queryKey: qk.datasets.items(datasetId ?? '', { page_size: 500 }),
+        queryFn: () => datasetsApi.listItems(datasetId!, { page_size: 500 }),
+        enabled: !!datasetId,
+        staleTime: 30_000,
+      });
+      // DatasetItem has filename + stac_item_id, not "name" — adapt the shape.
+      const items = (data?.items ?? []).map((it) => ({
+        id: it.id,
+        name: it.filename || it.stac_item_id || it.id.slice(0, 8),
+      }));
+      return { data: { items }, isLoading };
     },
   },
   map: {
@@ -204,7 +239,20 @@ const PICKER_CONFIG: Record<string, {
         queryFn: () => mapsApi.list(projectId),
         staleTime: 30_000,
       });
-      return { data: data as { items?: Array<{ id: string; name: string }> } | undefined, isLoading };
+      return { data: data as { items?: PickerItem[] } | undefined, isLoading };
+    },
+  },
+  map_aoi: {
+    label: 'Saved AOI',
+    dependsOn: 'map_id',
+    useItems: (_projectId, mapId) => {
+      const { data, isLoading } = useQuery({
+        queryKey: qk.mapAois.list(mapId ?? ''),
+        queryFn: () => mapAoisApi.listAois(mapId!),
+        enabled: !!mapId,
+        staleTime: 30_000,
+      });
+      return { data: data as { items?: PickerItem[] } | undefined, isLoading };
     },
   },
   model: {
@@ -215,7 +263,7 @@ const PICKER_CONFIG: Record<string, {
         queryFn: () => modelsApi.list(),
         staleTime: 30_000,
       });
-      return { data: data as { items?: Array<{ id: string; name: string }> } | undefined, isLoading };
+      return { data: data as { items?: PickerItem[] } | undefined, isLoading };
     },
   },
   annotation_set: {
@@ -226,7 +274,44 @@ const PICKER_CONFIG: Record<string, {
         queryFn: () => annotationSetsApi.listByProject(projectId),
         staleTime: 30_000,
       });
-      return { data: data as { items?: Array<{ id: string; name: string }> } | undefined, isLoading };
+      return { data: data as { items?: PickerItem[] } | undefined, isLoading };
+    },
+  },
+  annotation_schema: {
+    label: 'Annotation Schema',
+    useItems: () => {
+      const { data, isLoading } = useQuery({
+        queryKey: qk.annotationSchemas.list(),
+        queryFn: () => annotationSchemasApi.list(),
+        staleTime: 30_000,
+      });
+      return { data: data as { items?: PickerItem[] } | undefined, isLoading };
+    },
+  },
+  annotation_class: {
+    label: 'Classes',
+    multi: true,
+    dependsOn: 'schema_id',
+    useItems: (_projectId, schemaId) => {
+      const { data, isLoading } = useQuery({
+        queryKey: qk.annotationSchemas.classes(schemaId ?? ''),
+        queryFn: () => annotationSchemasApi.getClasses(schemaId!),
+        enabled: !!schemaId,
+        staleTime: 30_000,
+      });
+      // AnnotationClass already has id + name — shape matches PickerItem.
+      return { data: data as { items?: PickerItem[] } | undefined, isLoading };
+    },
+  },
+  style: {
+    label: 'Style',
+    useItems: () => {
+      const { data, isLoading } = useQuery({
+        queryKey: ['styles'],
+        queryFn: () => stylesApi.list(),
+        staleTime: 30_000,
+      });
+      return { data: data as { items?: PickerItem[] } | undefined, isLoading };
     },
   },
 };
@@ -236,11 +321,18 @@ function EntityPicker({
   label,
   value,
   onChange,
+  parentConfig,
+  onMenuOpenChange,
+  accent = '#7f5539',
 }: {
   pickerType: string;
   label: string;
   value: unknown;
   onChange: (val: unknown) => void;
+  parentConfig: Record<string, unknown>;
+  onMenuOpenChange?: (open: boolean) => void;
+  /** Node category color — used to tint in-node buttons/controls. */
+  accent?: string;
 }) {
   const { projectId } = usePipelineContext();
   const cfg = PICKER_CONFIG[pickerType];
@@ -251,9 +343,11 @@ function EntityPicker({
         <div style={{ marginBottom: '1px' }}>{label}</div>
         <input
           type="text"
+          className="nodrag"
           value={(value as string) ?? ''}
           onChange={(e) => { e.stopPropagation(); onChange(e.target.value); }}
           onMouseDown={(e) => e.stopPropagation()}
+          onClick={(e) => e.stopPropagation()}
           placeholder={`Enter ${pickerType} ID...`}
           style={fieldStyle}
         />
@@ -261,17 +355,55 @@ function EntityPicker({
     );
   }
 
-  const { data, isLoading } = cfg.useItems(projectId);
+  const dependentValue = cfg.dependsOn
+    ? (parentConfig[cfg.dependsOn] as string | undefined)
+    : undefined;
+  const { data, isLoading } = cfg.useItems(projectId, dependentValue);
   const items = data?.items ?? [];
+
+  // Block multi-select rendering until the parent dependency is set.
+  if (cfg.dependsOn && !dependentValue) {
+    return (
+      <div style={{ fontSize: '10px', color: '#6b5d4e' }}>
+        <div style={{ marginBottom: '1px' }}>{label}</div>
+        <div
+          style={{
+            ...fieldStyle,
+            color: '#9a8878',
+            cursor: 'not-allowed',
+            backgroundColor: '#f5ede0',
+          }}
+        >
+          Select {cfg.dependsOn.replace(/_/g, ' ')} first
+        </div>
+      </div>
+    );
+  }
+
+  if (cfg.multi) {
+    return (
+      <MultiEntityPicker
+        label={label}
+        items={items}
+        isLoading={isLoading}
+        value={value}
+        onChange={onChange}
+        onOpenChange={onMenuOpenChange}
+        accent={accent}
+      />
+    );
+  }
 
   return (
     <div style={{ fontSize: '10px', color: '#6b5d4e' }}>
       <div style={{ marginBottom: '1px' }}>{label}</div>
       <div className="relative">
         <select
+          className="nodrag"
           value={(value as string) ?? ''}
           onChange={(e) => { e.stopPropagation(); onChange(e.target.value || null); }}
           onMouseDown={(e) => e.stopPropagation()}
+          onClick={(e) => e.stopPropagation()}
           style={{
             ...fieldStyle,
             appearance: 'none',
@@ -303,6 +435,191 @@ function EntityPicker({
   );
 }
 
+// ── Multi-select picker (id list of named items) ─────────────────────────────
+
+function MultiEntityPicker({
+  label,
+  items,
+  isLoading,
+  value,
+  onChange,
+  onOpenChange,
+  accent = '#7f5539',
+}: {
+  label: string;
+  items: PickerItem[];
+  isLoading: boolean;
+  value: unknown;
+  onChange: (val: unknown) => void;
+  /** Node category color — used to tint in-node buttons/controls. */
+  accent?: string;
+  /** Lets the parent node lift its ReactFlow z-index while the menu is open so
+   *  the expanded list paints above neighbouring nodes. */
+  onOpenChange?: (open: boolean) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const rootRef = useRef<HTMLDivElement>(null);
+  const selected = Array.isArray(value) ? (value as string[]) : [];
+  const selectedSet = new Set(selected);
+  // Name lookup — using a plain object because `Map` is shadowed by the
+  // Lucide icon import in this module.
+  const byId: Record<string, PickerItem> = {};
+  for (const it of items) byId[it.id] = it;
+  const summary = selected.length === 0
+    ? `All ${label.toLowerCase()}`
+    : selected.length === 1
+      ? byId[selected[0]]?.name ?? '1 item'
+      : `${selected.length} items selected`;
+
+  const setOpenState = useCallback((next: boolean) => {
+    setOpen(next);
+    onOpenChange?.(next);
+  }, [onOpenChange]);
+
+  const toggle = (id: string) => {
+    const next = selectedSet.has(id)
+      ? selected.filter((s) => s !== id)
+      : [...selected, id];
+    onChange(next);
+  };
+
+  // Close on outside click. The menu renders inline (in normal flow) rather
+  // than in a portal/fixed overlay: a portaled fixed element forced Chrome to
+  // re-rasterise ReactFlow's scaled viewport layer, leaving the node blurry
+  // until the next pane transform (a drag). Inline content — like the native
+  // <select> used for "Select Model" — stays crisp.
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: MouseEvent) => {
+      if (!rootRef.current?.contains(e.target as Node)) setOpenState(false);
+    };
+    const id = window.setTimeout(() => document.addEventListener('mousedown', onDown), 0);
+    return () => {
+      window.clearTimeout(id);
+      document.removeEventListener('mousedown', onDown);
+    };
+  }, [open, setOpenState]);
+
+  // Restore the parent node's z-index if this picker unmounts while open.
+  useEffect(() => () => onOpenChange?.(false), [onOpenChange]);
+
+  return (
+    <div ref={rootRef} style={{ fontSize: '11px', color: '#6b5d4e', position: 'relative' }}>
+      <div style={{ marginBottom: '1px' }}>{label}</div>
+      <button
+        type="button"
+        className="nodrag"
+        onClick={(e) => { e.stopPropagation(); setOpenState(!open); }}
+        onMouseDown={(e) => e.stopPropagation()}
+        style={{
+          ...fieldStyle,
+          textAlign: 'left',
+          cursor: 'pointer',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          gap: '4px',
+          color: selected.length > 0 ? '#2e3428' : '#9a8878',
+        }}
+      >
+        <span className="truncate">{summary}</span>
+        {isLoading
+          ? <Loader2 className="w-2.5 h-2.5 animate-spin shrink-0" style={{ color: '#9a8878' }} />
+          : <ChevronDown className="w-2.5 h-2.5 shrink-0" style={{ color: '#9a8878' }} />}
+      </button>
+      {open && (
+        <div
+          className="nodrag nowheel"
+          onMouseDown={(e) => e.stopPropagation()}
+          onClick={(e) => e.stopPropagation()}
+          style={{
+            marginTop: '3px',
+            border: '1px solid #d4c0a8',
+            backgroundColor: '#fdf8f2',
+            borderRadius: '3px',
+            maxHeight: '180px',
+            overflowY: 'auto',
+            overflowX: 'hidden',
+            padding: '2px',
+            boxSizing: 'border-box',
+          }}
+        >
+          {items.length === 0 ? (
+            <div style={{ padding: '5px 6px', fontSize: '12px', color: '#9a8878' }}>
+              {isLoading ? 'Loading…' : 'No items'}
+            </div>
+          ) : (
+            <>
+              {selected.length > 0 && (
+                <button
+                  type="button"
+                  onClick={(e) => { e.stopPropagation(); onChange([]); }}
+                  style={{
+                    width: '100%',
+                    textAlign: 'left',
+                    padding: '4px 6px',
+                    color: accent,
+                    background: 'none',
+                    border: 'none',
+                    cursor: 'pointer',
+                    fontSize: '12px',
+                    borderBottom: '1px solid #ede0d4',
+                    marginBottom: '2px',
+                  }}
+                >
+                  Clear (use whole dataset)
+                </button>
+              )}
+              {items.map((item) => {
+                const checked = selectedSet.has(item.id);
+                return (
+                  <label
+                    key={item.id}
+                    className="flex items-center"
+                    onMouseDown={(e) => e.stopPropagation()}
+                    style={{
+                      padding: '5px 4px',
+                      cursor: 'pointer',
+                      borderRadius: '2px',
+                      backgroundColor: checked ? '#f0e8d4' : 'transparent',
+                      display: 'flex',
+                      alignItems: 'center',
+                      boxSizing: 'border-box',
+                      gap: '6px',
+                    }}
+                  >
+                    <input
+                      type="checkbox"
+                      className="nodrag"
+                      checked={checked}
+                      onChange={(e) => { e.stopPropagation(); toggle(item.id); }}
+                      onMouseDown={(e) => e.stopPropagation()}
+                      onClick={(e) => e.stopPropagation()}
+                      style={{ width: '13px', height: '13px', flexShrink: 0 }}
+                    />
+                    <span
+                      className="truncate"
+                      title={item.name}
+                      style={{
+                        fontSize: '12px',
+                        lineHeight: '1.4',
+                        flex: 1,
+                        minWidth: 0,
+                      }}
+                    >
+                      {item.name}
+                    </span>
+                  </label>
+                );
+              })}
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── Shared field styles ───────────────────────────────────────────────────────
 
 const fieldStyle = {
@@ -317,6 +634,147 @@ const fieldStyle = {
   lineHeight: '16px',
 } as const;
 
+// ── Model prompt override (run_inference node) ───────────────────────────────
+// Prompted models (adapter declares `prompt_key_map.text_prompt`, e.g. SAM3)
+// can't infer a label from the image like YOLO — the user explicitly picks an
+// output class from the model's bound schema and types a comma-separated text
+// prompt. Both are written to the node config as `output_class_id` +
+// `prompt_payload.text_prompt` — the SAME keys the AOI inference job sends
+// (see AoiInferencePanel + map-aois.createInferenceJob) — so the run_inference
+// executor forwards them verbatim (force_class_id + per-patch prompt).
+//
+// YOLO and other non-prompted models render nothing here (labels are intrinsic).
+function Sam3PromptFields({
+  modelId,
+  config,
+  onConfigChange,
+}: {
+  modelId: string | undefined;
+  config: Record<string, unknown>;
+  onConfigChange: (key: string, value: unknown) => void;
+}) {
+  // Resolve the selected model to detect prompt support + its bound schema.
+  // Reuses the model picker's cached list query — no extra request.
+  const { data: modelsResp } = useQuery({
+    queryKey: qk.models.list(),
+    queryFn: () => modelsApi.list(),
+    staleTime: 30_000,
+  });
+  const model = modelsResp?.items?.find((m) => m.id === modelId);
+
+  const adapterCfg = (model?.output_config?.adapter_config ?? {}) as Record<string, unknown>;
+  const promptKeyMap = (adapterCfg.prompt_key_map ?? {}) as Record<string, unknown>;
+  const supportsTextPrompt = typeof promptKeyMap.text_prompt === 'string';
+  const schemaId = model?.annotation_schema_id ?? null;
+
+  const { data: classesResp, isLoading } = useQuery({
+    queryKey: ['pipeline-node', 'schema-classes', schemaId],
+    queryFn: () => annotationSchemasApi.getClasses(schemaId as string),
+    enabled: supportsTextPrompt && !!schemaId,
+    staleTime: 30_000,
+  });
+  const classes = classesResp?.items ?? [];
+
+  // When the chosen model can't take prompts (YOLO) or none is selected, drop
+  // any stale prompt/class config so it isn't sent for the wrong model. Gated
+  // on the model list having resolved (and the model being found when an id is
+  // set) so we never wipe a valid saved value while the query is still loading.
+  const modelResolved = !!modelsResp && (!modelId || !!model);
+  useEffect(() => {
+    if (!modelResolved || (modelId && supportsTextPrompt)) return;
+    if (config.output_class_id !== undefined) onConfigChange('output_class_id', undefined);
+    if (config.prompt_payload !== undefined) onConfigChange('prompt_payload', undefined);
+  }, [
+    modelResolved, modelId, supportsTextPrompt,
+    config.output_class_id, config.prompt_payload, onConfigChange,
+  ]);
+
+  // Local raw text for the prompt field. We must NOT re-derive the input value
+  // from the parsed list on every keystroke: splitting/trimming mid-type eats
+  // spaces and trailing commas as you type them. Keep the raw string locally,
+  // write the parsed list to config, and only re-sync from config when it
+  // changes externally (e.g. loading a saved pipeline / switching model).
+  const promptList =
+    (config.prompt_payload as { text_prompt?: string[] } | undefined)?.text_prompt ?? [];
+  const canonicalPrompt = promptList.join(', ');
+  const [promptText, setPromptText] = useState(canonicalPrompt);
+  useEffect(() => {
+    const parsedLocal = promptText
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean)
+      .join(', ');
+    if (canonicalPrompt !== parsedLocal) setPromptText(canonicalPrompt);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [canonicalPrompt]);
+
+  // Only prompted models get the override UI.
+  if (!modelId || !supportsTextPrompt) return null;
+
+  const outputClassId = (config.output_class_id as string | undefined) ?? '';
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+      <div style={{ height: `${SEPARATOR_H}px`, display: 'flex', alignItems: 'center' }}>
+        <div style={{ width: '100%', borderTop: '1px solid #ede0d4' }} />
+      </div>
+
+      {/* Output class — drives the forced label for every prediction. */}
+      <div style={{ fontSize: '10px', color: '#6b5d4e' }}>
+        <div style={{ marginBottom: '1px' }}>Output class</div>
+        {schemaId == null ? (
+          <div style={{ ...fieldStyle, color: '#9a8878' }}>No schema bound to model</div>
+        ) : (
+          <div className="relative">
+            <select
+              className="nodrag"
+              value={outputClassId}
+              onChange={(e) => {
+                e.stopPropagation();
+                onConfigChange('output_class_id', e.target.value || null);
+              }}
+              onMouseDown={(e) => e.stopPropagation()}
+              onClick={(e) => e.stopPropagation()}
+              style={{ ...fieldStyle, appearance: 'none', paddingRight: '18px', cursor: 'pointer' }}
+            >
+              <option value="">{isLoading ? 'Loading…' : '— pick a class —'}</option>
+              {classes.map((c) => (
+                <option key={c.id} value={c.id}>{c.name}</option>
+              ))}
+            </select>
+            <div
+              className="absolute right-1 top-1/2 -translate-y-1/2 pointer-events-none"
+              style={{ color: '#9a8878' }}
+            >
+              <ChevronDown className="w-2.5 h-2.5" />
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Text prompt — comma-separated phrases forwarded to the model. */}
+      <div style={{ fontSize: '10px', color: '#6b5d4e' }}>
+        <div style={{ marginBottom: '1px' }}>Prompt</div>
+        <input
+          type="text"
+          className="nodrag"
+          value={promptText}
+          onChange={(e) => {
+            e.stopPropagation();
+            setPromptText(e.target.value);
+            const list = e.target.value.split(',').map((s) => s.trim()).filter(Boolean);
+            onConfigChange('prompt_payload', { text_prompt: list });
+          }}
+          onMouseDown={(e) => e.stopPropagation()}
+          onClick={(e) => e.stopPropagation()}
+          placeholder="e.g. mining, bulldozer"
+          style={fieldStyle}
+        />
+      </div>
+    </div>
+  );
+}
+
 // ── Inline config field ─────────────────────────────────────────────────────
 
 function InlineField({
@@ -324,11 +782,18 @@ function InlineField({
   schema,
   value,
   onChange,
+  parentConfig,
+  onMenuOpenChange,
+  accent = '#7f5539',
 }: {
   fieldKey: string;
   schema: Record<string, unknown>;
   value: unknown;
   onChange: (val: unknown) => void;
+  parentConfig: Record<string, unknown>;
+  onMenuOpenChange?: (open: boolean) => void;
+  /** Node category color — used to tint in-node buttons/controls. */
+  accent?: string;
 }) {
   const label = (schema.title as string) ?? (schema.label as string) ?? fieldKey;
   const type = schema.type as string;
@@ -342,6 +807,9 @@ function InlineField({
         label={label}
         value={value}
         onChange={onChange}
+        parentConfig={parentConfig}
+        onMenuOpenChange={onMenuOpenChange}
+        accent={accent}
       />
     );
   }
@@ -349,16 +817,19 @@ function InlineField({
   if (type === 'boolean') {
     return (
       <label
-        className="flex items-center justify-between gap-1"
+        className="nodrag flex items-center justify-between gap-1"
         style={{ fontSize: '10px', color: '#6b5d4e', height: '20px' }}
+        onMouseDown={(e) => e.stopPropagation()}
       >
         <span>{label}</span>
         <input
           type="checkbox"
           checked={!!value}
           onChange={(e) => { e.stopPropagation(); onChange(e.target.checked); }}
-          className="accent-[#7f5539]"
-          style={{ width: '12px', height: '12px' }}
+          onMouseDown={(e) => e.stopPropagation()}
+          onClick={(e) => e.stopPropagation()}
+          className="nodrag"
+          style={{ width: '12px', height: '12px', accentColor: accent }}
         />
       </label>
     );
@@ -372,9 +843,11 @@ function InlineField({
         <div style={{ marginBottom: '1px' }}>{label}</div>
         <div className="relative">
           <select
+            className="nodrag"
             value={(value as string) ?? (schema.default as string) ?? ''}
             onChange={(e) => { e.stopPropagation(); onChange(e.target.value); }}
             onMouseDown={(e) => e.stopPropagation()}
+            onClick={(e) => e.stopPropagation()}
             style={{
               ...fieldStyle,
               appearance: 'none',
@@ -382,9 +855,12 @@ function InlineField({
               cursor: 'pointer',
             }}
           >
-            {enumOptions.map((opt) => (
-              <option key={opt} value={opt}>{opt}</option>
-            ))}
+            {enumOptions.map((opt, i) => {
+              const labels = schema['x-enum-labels'] as string[] | undefined;
+              return (
+                <option key={opt} value={opt}>{labels?.[i] ?? opt}</option>
+              );
+            })}
           </select>
           <div
             className="absolute right-1 top-1/2 -translate-y-1/2 pointer-events-none"
@@ -406,6 +882,7 @@ function InlineField({
         <div style={{ marginBottom: '1px' }}>{label}</div>
         <input
           type="number"
+          className="nodrag"
           value={(value as number) ?? (schema.default as number) ?? ''}
           onChange={(e) => {
             e.stopPropagation();
@@ -413,6 +890,7 @@ function InlineField({
             onChange(isNaN(parsed) ? '' : parsed);
           }}
           onMouseDown={(e) => e.stopPropagation()}
+          onClick={(e) => e.stopPropagation()}
           min={min}
           max={max}
           step={step}
@@ -442,6 +920,7 @@ function InlineField({
                 <button
                   key={opt}
                   type="button"
+                  className="nodrag"
                   onClick={(e) => {
                     e.stopPropagation();
                     onChange(isSelected
@@ -454,8 +933,8 @@ function InlineField({
                     fontSize: '9px',
                     padding: '1px 5px',
                     borderRadius: '3px',
-                    border: `1px solid ${isSelected ? '#7f5539' : '#d4c0a8'}`,
-                    backgroundColor: isSelected ? '#7f5539' : '#fdf8f2',
+                    border: `1px solid ${isSelected ? accent : '#d4c0a8'}`,
+                    backgroundColor: isSelected ? accent : '#fdf8f2',
                     color: isSelected ? '#f5ede0' : '#6b5d4e',
                     cursor: 'pointer',
                     lineHeight: '14px',
@@ -476,13 +955,33 @@ function InlineField({
         <div style={{ marginBottom: '1px' }}>{label}</div>
         <input
           type="text"
+          className="nodrag"
           value={Array.isArray(value) ? (value as string[]).join(', ') : (value as string) ?? ''}
           onChange={(e) => {
             e.stopPropagation();
             onChange(e.target.value.split(',').map((s) => s.trim()).filter(Boolean));
           }}
           onMouseDown={(e) => e.stopPropagation()}
+          onClick={(e) => e.stopPropagation()}
           placeholder="comma-separated values"
+          style={fieldStyle}
+        />
+      </div>
+    );
+  }
+
+  // string with format: date-time → native datetime picker
+  if (schema.format === 'date-time') {
+    return (
+      <div style={{ fontSize: '10px', color: '#6b5d4e' }}>
+        <div style={{ marginBottom: '1px' }}>{label}</div>
+        <input
+          type="datetime-local"
+          className="nodrag"
+          value={(value as string) ?? ''}
+          onChange={(e) => { e.stopPropagation(); onChange(e.target.value); }}
+          onMouseDown={(e) => e.stopPropagation()}
+          onClick={(e) => e.stopPropagation()}
           style={fieldStyle}
         />
       </div>
@@ -495,9 +994,11 @@ function InlineField({
       <div style={{ marginBottom: '1px' }}>{label}</div>
       <input
         type="text"
+        className="nodrag"
         value={(value as string) ?? ''}
         onChange={(e) => { e.stopPropagation(); onChange(e.target.value); }}
         onMouseDown={(e) => e.stopPropagation()}
+        onClick={(e) => e.stopPropagation()}
         style={fieldStyle}
       />
     </div>
@@ -573,13 +1074,61 @@ function PipelineNodeComponent({ id, data, selected }: NodeProps) {
   const { setNodes } = useReactFlow();
   const [showTooltip, setShowTooltip] = useState(false);
 
+  // Lift this node above its neighbours while an inline dropdown is open so the
+  // expanded list isn't painted under adjacent nodes. We toggle the z-index on
+  // ReactFlow's own node wrapper via the DOM rather than through `setNodes` —
+  // mutating the nodes array mid-interaction desyncs ReactFlow's drag handling
+  // and leaves nodes "stuck" to the cursor.
+  const nodeRootRef = useRef<HTMLDivElement>(null);
+  const [menuOpen, setMenuOpen] = useState(false);
+  useLayoutEffect(() => {
+    const wrapper = nodeRootRef.current?.closest('.react-flow__node') as HTMLElement | null;
+    if (!wrapper) return;
+    // Reapplied after every render so a config re-render (which resets the
+    // wrapper's inline z-index) doesn't drop the open menu behind neighbours.
+    wrapper.style.zIndex = menuOpen ? '1000' : '';
+  });
+
   const configSchema = config_schema ?? {};
   const properties = (configSchema.properties ?? configSchema) as Record<string, Record<string, unknown>>;
+  // `output_class_id` + `prompt_payload` are declared on the run_inference
+  // backend schema, but the raw generic inputs are unusable (a bare UUID text
+  // box and an object field with no editor). run_inference renders them via the
+  // rich `Sam3PromptFields` widget instead (driven by the selected model's
+  // adapter), so hide the raw keys from the generic loop.
+  const hidePromptKeys = nodeType === 'run_inference';
+  // `x-visible-when: { field: value }` hides a field until a sibling field holds
+  // the given value (e.g. the trigger node only shows the cron box when
+  // mode === 'recurring'). Defaults are applied so a field whose controller is
+  // still unset behaves as its default.
+  const isVisible = (v: Record<string, unknown>) => {
+    const cond = v['x-visible-when'] as Record<string, unknown> | undefined;
+    if (!cond) return true;
+    return Object.entries(cond).every(([depKey, want]) => {
+      const current =
+        config[depKey] ?? (properties[depKey] as Record<string, unknown> | undefined)?.default;
+      return current === want;
+    });
+  };
   const configEntries = Object.entries(properties).filter(
-    ([, v]) => typeof v === 'object' && v !== null && 'type' in v,
+    ([k, v]) =>
+      typeof v === 'object' && v !== null && 'type' in v &&
+      !(hidePromptKeys && (k === 'output_class_id' || k === 'prompt_payload')) &&
+      isVisible(v as Record<string, unknown>),
   );
   const isPatchSelector = nodeType === 'patch_selector';
+  const isReport = nodeType === 'generate_report';
+  const isRunInference = nodeType === 'run_inference';
   const isPlaceholder = status === 'placeholder';
+
+  // The model picker's config key (backend usually names it `model_id`). Derive
+  // it from the schema's x-picker so the SAM3 prompt fields read the chosen
+  // model regardless of the exact field name.
+  const modelFieldKey =
+    configEntries.find(
+      ([, v]) => (v as Record<string, unknown>)['x-picker'] === 'model',
+    )?.[0] ?? 'model_id';
+  const selectedModelId = config[modelFieldKey] as string | undefined;
 
   const isDisplay = isDisplayNode(nodeType);
   const hasInputs = inputs.length > 0;
@@ -636,9 +1185,10 @@ function PipelineNodeComponent({ id, data, selected }: NodeProps) {
 
   return (
     <div
+      ref={nodeRootRef}
       className="relative"
       style={{
-        width: `${NODE_WIDTH}px`,
+        width: `${isReport ? 340 : NODE_WIDTH}px`,
         backgroundColor: '#fefcf9',
         border: `1.5px solid ${selected ? cat.color : '#d4c0a8'}`,
         borderRadius: '6px',
@@ -754,6 +1304,9 @@ function PipelineNodeComponent({ id, data, selected }: NodeProps) {
                       schema={schema}
                       value={config[key]}
                       onChange={(val) => onConfigChange(key, val)}
+                      parentConfig={config}
+                      onMenuOpenChange={setMenuOpen}
+                      accent={cat.color}
                     />
                   </div>
                 ))}
@@ -799,13 +1352,40 @@ function PipelineNodeComponent({ id, data, selected }: NodeProps) {
                       schema={schema}
                       value={config[key]}
                       onChange={(val) => onConfigChange(key, val)}
+                      parentConfig={config}
+                      onMenuOpenChange={setMenuOpen}
+                      accent={cat.color}
                     />
                   </div>
                 ))}
               </div>
             )}
 
-            {/* ── 3. Patch preview ── */}
+            {/* ── 3. Model prompt fields (run_inference, prompted models only) ──
+                  Driven by the selected model's adapter; renders its own leading
+                  separator and nothing for YOLO-style models, so no dangling
+                  divider appears. */}
+            {isRunInference && (
+              <Sam3PromptFields
+                modelId={selectedModelId}
+                config={config}
+                onConfigChange={onConfigChange}
+              />
+            )}
+
+            {/* ── 4. Report viewer (generate_report) ── */}
+            {isReport && (
+              <>
+                {configEntries.length > 0 && (
+                  <div style={{ height: `${SEPARATOR_H}px`, display: 'flex', alignItems: 'center' }}>
+                    <div style={{ width: '100%', borderTop: '1px solid #ede0d4' }} />
+                  </div>
+                )}
+                <ReportViewer nodeId={id} accent={cat.color} />
+              </>
+            )}
+
+            {/* ── 5. Patch preview ── */}
             {isPatchSelector && (
               <>
                 {configEntries.length > 0 && (

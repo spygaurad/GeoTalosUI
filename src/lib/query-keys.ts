@@ -12,6 +12,29 @@ export const qk = {
   maps: {
     list: (projectId?: string) => ['maps', projectId] as const,
     detail: (id: string) => ['maps', 'detail', id] as const,
+    /** Datasets attached to a map. */
+    datasets: (mapId: string) => ['maps', mapId, 'datasets'] as const,
+    /** Resources intersecting an arbitrary AOI bbox (datasets, items, vectors, raster masks). */
+    aoiResources: (mapId: string, bbox: string) => ['maps', mapId, 'aoi-resources', bbox] as const,
+    /** Dataset items intersecting an arbitrary AOI bbox (for ad-hoc, unsaved AOIs). */
+    datasetItemsInAoi: (mapId: string, datasetId: string, bbox: string) =>
+      ['maps', mapId, 'datasets', datasetId, 'items-in-aoi', bbox] as const,
+  },
+
+  mapAois: {
+    /** List of saved AOIs on a map. */
+    list: (mapId: string) => ['maps', mapId, 'aois'] as const,
+    /** One saved AOI. */
+    detail: (mapId: string, aoiId: string) => ['maps', mapId, 'aois', aoiId] as const,
+    /** Saved selection (datasets/items/filters) for an AOI. */
+    selection: (mapId: string, aoiId: string) =>
+      ['maps', mapId, 'aois', aoiId, 'selection'] as const,
+    /** Saved render config (bands/rescale/colormap) for an AOI. */
+    rendering: (mapId: string, aoiId: string) =>
+      ['maps', mapId, 'aois', aoiId, 'rendering'] as const,
+    timeline: (mapId: string, aoiId: string) => ['maps', mapId, 'aois', aoiId, 'timeline'] as const,
+    timelineManifest: (mapId: string, aoiId: string) => ['maps', mapId, 'aois', aoiId, 'timeline-manifest'] as const,
+    tileJson: (mapId: string, aoiId: string) => ['maps', mapId, 'aois', aoiId, 'tilejson'] as const,
   },
 
   datasets: {
@@ -61,6 +84,10 @@ export const qk = {
   models: {
     list: (params?: Record<string, unknown>) => ['models', params] as const,
     detail: (id: string) => ['models', id] as const,
+  },
+
+  adapters: {
+    list: () => ['inference-adapters'] as const,
   },
 
   jobs: {

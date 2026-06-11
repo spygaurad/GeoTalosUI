@@ -1064,7 +1064,7 @@ const MOCK_DATASETS: Dataset[] = [
   {
     id: 'd1', organization_id: 'o1',
     name: 'Sentinel-2 Amazon Basin 2024', stac_collection_id: 'sentinel-2-l2a',
-    dataset_type: 'raster', status: 'ready',
+    dataset_type: 'imagery', status: 'ready',
     geometry: null,
     temporal_extent: { lower: '2024-01-01T00:00:00Z', upper: '2024-03-31T00:00:00Z', bounds: '[)' },
     metadata: { file_count: 1240 },
@@ -1074,7 +1074,7 @@ const MOCK_DATASETS: Dataset[] = [
   {
     id: 'd2', organization_id: 'o1',
     name: 'LIDAR Point Cloud — Sector 4', stac_collection_id: null,
-    dataset_type: 'raster', status: 'ready',
+    dataset_type: 'imagery', status: 'ready',
     geometry: null,
     temporal_extent: { lower: '2024-02-01T00:00:00Z', upper: '2024-02-01T00:00:00Z', bounds: '[)' },
     metadata: { file_count: 342 },
@@ -1084,7 +1084,7 @@ const MOCK_DATASETS: Dataset[] = [
   {
     id: 'd3', organization_id: 'o1',
     name: 'Field Observation Points — Team Alpha', stac_collection_id: null,
-    dataset_type: 'vector', status: 'ingesting',
+    dataset_type: 'imagery', status: 'ingesting',
     geometry: null, temporal_extent: null, metadata: { file_count: 89 },
     description: null, created_by: null,
     created_at: '2024-03-10T10:00:00Z', updated_at: '2024-03-13T08:00:00Z', deleted_at: null,

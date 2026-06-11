@@ -1,12 +1,15 @@
 'use client';
 
+import { useCallback, useEffect } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { ExternalLink, FileImage, ChevronRight, Download } from 'lucide-react';
+import { ExternalLink, FileImage, ChevronRight, Download, Layers } from 'lucide-react';
 import { datasetsApi } from '@/lib/api/datasets';
 import { qk } from '@/lib/query-keys';
 import { useMapLayersStore } from '@/stores/mapLayersStore';
 import { MC } from '../../mapColors';
+import { BandSelector } from './BandSelector';
 import type { DatasetMetadata } from '@/types/api';
+import type { BandSelection } from '../../types';
 
 interface DatasetInfoPanelProps {
   datasetId: string;
@@ -30,11 +33,103 @@ const STATUS_COLORS: Record<string, string> = {
 
 export function DatasetInfoPanel({ datasetId }: DatasetInfoPanelProps) {
   const openItemsPanel = useMapLayersStore((s) => s.openItemsPanel);
+  // Find the layer for this dataset. For regular dataset layers the key is the
+  // dataset UUID. For AOI child layers the key is "aoi-{ts}-ds-{datasetId}"
+  // and sourceDatasetId holds the real dataset UUID.
+  const layer = useMapLayersStore((s) =>
+    s.layers[datasetId] ??
+    Object.values(s.layers).find((l) => l.sourceDatasetId === datasetId) ??
+    null
+  );
+  const setLayerBandSelection = useMapLayersStore((s) => s.setLayerBandSelection);
+  const setLayerTileConfig = useMapLayersStore((s) => s.setLayerTileConfig);
+  const setLayerRenderingConfig = useMapLayersStore((s) => s.setLayerRenderingConfig);
 
   const { data: dataset, isLoading } = useQuery({
     queryKey: qk.datasets.detail(datasetId),
     queryFn: () => datasetsApi.get(datasetId),
   });
+
+  // ── Band change helpers ───────────────────────────────────────────────────
+  // Helpers that iterate over ALL raster layers that belong to this dataset:
+  //   • the direct dataset layer (key === datasetId)
+  //   • every AOI child layer (sourceDatasetId === datasetId)
+  //   • every item layer (parentDatasetId === datasetId)
+  // This ensures dataset band/preset changes propagate to items under it.
+
+  /** Returns all store layer IDs that map to this dataset. */
+  const getMatchingLayerIds = useCallback((): string[] => {
+    const allLayers = useMapLayersStore.getState().layers;
+    return Object.entries(allLayers)
+      .filter(([id, l]) =>
+        (id === datasetId || l.sourceDatasetId === datasetId || l.parentDatasetId === datasetId)
+        && (l.sourceType === 'dataset' || l.sourceType === 'stac_item')
+      )
+      .map(([id]) => id);
+  }, [datasetId]);
+
+  const applyBandToCurrentUrl = useCallback((bands: BandSelection, rc: NonNullable<DatasetMetadata['rendering_config']>) => {
+    const allLayers = useMapLayersStore.getState().layers;
+    for (const lid of getMatchingLayerIds()) {
+      const l = allLayers[lid];
+      if (!l?.tileUrl) continue;
+      const [basePath, existingQs] = l.tileUrl.split('?');
+      const params = new URLSearchParams(existingQs ?? '');
+      params.set('asset_bidx', `data|${bands.r},${bands.g},${bands.b}`);
+      params.delete('colormap_name');
+      params.delete('colormap');
+      const rBand = rc.bands.find((b) => b.index === bands.r);
+      const gBand = rc.bands.find((b) => b.index === bands.g);
+      const bBand = rc.bands.find((b) => b.index === bands.b);
+      if (rBand && gBand && bBand) {
+        const p2 = Math.min(rBand.stats.p2, gBand.stats.p2, bBand.stats.p2);
+        const p98 = Math.max(rBand.stats.p98, gBand.stats.p98, bBand.stats.p98);
+        params.set('rescale', `${Math.round(p2)},${Math.round(p98)}`);
+      } else {
+        params.delete('rescale');
+      }
+      setLayerTileConfig(lid, { tileUrl: `${basePath}?${params.toString()}` });
+    }
+  }, [getMatchingLayerIds, setLayerTileConfig]);
+
+  // Sync renderingConfig to store once the API data arrives — only on existing layers.
+  useEffect(() => {
+    if (!dataset?.metadata?.rendering_config) return;
+    const rc = dataset.metadata.rendering_config;
+    const allLayers = useMapLayersStore.getState().layers;
+    for (const lid of Object.entries(allLayers)
+      .filter(([id, l]) =>
+        (id === datasetId || l.sourceDatasetId === datasetId || l.parentDatasetId === datasetId)
+        && (l.sourceType === 'dataset' || l.sourceType === 'stac_item')
+        && !l.renderingConfig
+      )
+      .map(([id]) => id)) {
+      setLayerRenderingConfig(lid, rc);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [datasetId, dataset?.metadata?.rendering_config, setLayerRenderingConfig]);
+
+  const applyPresetToCurrentUrl = useCallback((presetId: string, rc: NonNullable<DatasetMetadata['rendering_config']>) => {
+    const preset = rc.presets[presetId];
+    if (!preset) return;
+    const allLayers = useMapLayersStore.getState().layers;
+    for (const lid of getMatchingLayerIds()) {
+      const l = allLayers[lid];
+      if (!l?.tileUrl) continue;
+      const [basePath, existingQs] = l.tileUrl.split('?');
+      const params = new URLSearchParams(existingQs ?? '');
+      params.delete('asset_bidx');
+      params.delete('rescale');
+      params.delete('colormap_name');
+      params.delete('colormap');
+      if (preset.params.asset_bidx) params.set('asset_bidx', preset.params.asset_bidx);
+      if (preset.params.rescale) params.set('rescale', preset.params.rescale);
+      if (preset.params.colormap_name) params.set('colormap_name', preset.params.colormap_name);
+      if (preset.params.colormap) params.set('colormap', preset.params.colormap);
+      const qs = params.toString();
+      setLayerTileConfig(lid, { tileUrl: qs ? `${basePath}?${qs}` : basePath });
+    }
+  }, [getMatchingLayerIds, setLayerTileConfig]);
 
   if (isLoading) {
     return (
@@ -130,6 +225,46 @@ export function DatasetInfoPanel({ datasetId }: DatasetInfoPanelProps) {
           <ChevronRight size={14} style={{ color: MC.textMuted, flexShrink: 0 }} />
         </button>
       )}
+
+      {/* Band Selection — shown when dataset has multi-band rendering config */}
+      {(() => {
+        const rc = dataset.metadata?.rendering_config ?? layer?.renderingConfig;
+        if (!rc || rc.bands.length < 2) return null;
+        return (
+          <div style={{ padding: '10px 14px', borderBottom: `1px solid ${MC.border}` }}>
+            <div style={{
+              display: 'flex', alignItems: 'center', gap: 6,
+              fontSize: 10, fontWeight: 700, letterSpacing: '0.08em',
+              textTransform: 'uppercase', color: MC.sectionLabel, marginBottom: 8,
+            }}>
+              <Layers size={11} style={{ color: MC.accent }} />
+              Band Selection
+            </div>
+            <BandSelector
+              renderingConfig={rc}
+              bandSelection={layer?.bandSelection ?? null}
+              activePreset={layer?.activePreset ?? null}
+              onBandChange={(bands, preset) => {
+                getMatchingLayerIds().forEach((lid) =>
+                  setLayerBandSelection(lid, bands, preset ?? null)
+                );
+                applyBandToCurrentUrl(bands, rc);
+              }}
+              onPresetChange={(presetId) => {
+                const preset = rc.presets[presetId];
+                const match = preset?.params.asset_bidx?.match(/\|(\d+),(\d+),(\d+)/);
+                const bands: BandSelection | null = match
+                  ? { r: Number(match[1]), g: Number(match[2]), b: Number(match[3]) }
+                  : null;
+                getMatchingLayerIds().forEach((lid) =>
+                  setLayerBandSelection(lid, bands, presetId)
+                );
+                applyPresetToCurrentUrl(presetId, rc);
+              }}
+            />
+          </div>
+        );
+      })()}
 
       {/* Metadata */}
       <div style={{ padding: '8px 14px' }}>

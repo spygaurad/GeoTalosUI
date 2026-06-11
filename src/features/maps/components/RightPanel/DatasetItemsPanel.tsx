@@ -3,13 +3,22 @@
 import { useState, useMemo } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
-import { Calendar, FileImage, Map, Loader, ChevronLeft, Filter } from 'lucide-react';
+import { Calendar, FileImage, Map, Loader, ChevronLeft, Filter, Trash2 } from 'lucide-react';
 import { datasetsApi } from '@/lib/api/datasets';
 import { qk } from '@/lib/query-keys';
 import { useMapLayersStore } from '@/stores/mapLayersStore';
-import { getMapInstance } from '@/stores/mapStore';
 import type { DatasetItem } from '@/types/api';
+import { datasetItemLabel } from '@/features/datasets/itemLabel';
 import { MC } from '../../mapColors';
+import {
+  addDatasetItemLayerToMap,
+  getDatasetItemLayerId,
+  removeDatasetItemLayerFromMap,
+} from '@/features/maps/utils/datasetItemLayer';
+import {
+  switchAoiChildLayerToFirstItem,
+  switchAoiChildLayerToItem,
+} from '@/features/maps/utils/aoiChildItem';
 
 interface DatasetItemsPanelProps {
   datasetId: string;
@@ -18,15 +27,18 @@ interface DatasetItemsPanelProps {
 
 export function DatasetItemsPanel({ datasetId, mapId }: DatasetItemsPanelProps) {
   const queryClient = useQueryClient();
-  const initLayer = useMapLayersStore((s) => s.initLayer);
-  const setBackendLayerId = useMapLayersStore((s) => s.setBackendLayerId);
-  const setLayerTileConfig = useMapLayersStore((s) => s.setLayerTileConfig);
   const openDatasetPanel = useMapLayersStore((s) => s.openDatasetPanel);
   const layers = useMapLayersStore((s) => s.layers);
-  const [addingItemId, setAddingItemId] = useState<string | null>(null);
+  const selectedAoiLayerId = useMapLayersStore((s) => s.selectedAoiLayerId);
+  const [actingItemId, setActingItemId] = useState<string | null>(null);
   const [dateFrom, setDateFrom] = useState('');
   const [dateTo, setDateTo] = useState('');
   const [showFilters, setShowFilters] = useState(false);
+
+  const aoiChildLayerId = selectedAoiLayerId ? `${selectedAoiLayerId}-ds-${datasetId}` : null;
+  const aoiChildLayer = aoiChildLayerId ? layers[aoiChildLayerId] : undefined;
+  const isAoiScoped = !!aoiChildLayer?.parentAoiId && !!aoiChildLayer?.clipBounds;
+  const aoiBboxParam = isAoiScoped ? aoiChildLayer!.clipBounds!.join(',') : undefined;
 
   // Fetch dataset details
   const { data: dataset } = useQuery({
@@ -36,8 +48,13 @@ export function DatasetItemsPanel({ datasetId, mapId }: DatasetItemsPanelProps) 
 
   // Fetch items in the dataset
   const { data: itemsData, isLoading } = useQuery({
-    queryKey: qk.datasets.items(datasetId),
-    queryFn: () => datasetsApi.listItems(datasetId, { page_size: 100 }),
+    queryKey: isAoiScoped
+      ? [...qk.datasets.items(datasetId), 'aoi', aoiBboxParam ?? '']
+      : qk.datasets.items(datasetId),
+    queryFn: () => datasetsApi.listItems(datasetId, {
+      page_size: 100,
+      ...(aoiBboxParam ? { bbox: aoiBboxParam } : {}),
+    }),
     enabled: !!datasetId,
   });
 
@@ -55,73 +72,58 @@ export function DatasetItemsPanel({ datasetId, mapId }: DatasetItemsPanelProps) 
     });
   }, [allItems, dateFrom, dateTo]);
 
-  // Add a single item as a stac_item layer on the map
-  const addItemToMap = async (item: DatasetItem) => {
-    if (!mapId) return;
-    setAddingItemId(item.id);
+  const toggleItemOnMap = async (item: DatasetItem, onMap: boolean) => {
+    if (actingItemId === item.id) return;
+    setActingItemId(item.id);
 
     try {
-      const layerId = `item-${item.stac_item_id}`;
-
-      // 1. Register the layer in the backend (integration guide §3A)
-      const bl = await datasetsApi.addMapLayer(mapId, {
-        name: item.stac_item_id,
-        layer_type: 'raster',
-        source_type: 'stac_item',
-        stac_item_id: item.stac_item_id,
-        source_config: { dataset_id: datasetId },
-        visible: true,
-        opacity: 1.0,
-      });
-
-      // 2. Init in store
-      initLayer(layerId, 'dataset', {
-        sourceType: 'stac_item',
-        parentDatasetId: datasetId,
-        stacItemId: item.stac_item_id,
-      });
-      setBackendLayerId(layerId, bl.id);
-
-      // 3. Fetch tile URL template + rendering config
-      try {
-        const cfg = await datasetsApi.getItemTileConfig(datasetId, item.id);
-        if (cfg.tile_url_template) {
-          setLayerTileConfig(layerId, { tileUrl: cfg.tile_url_template });
+      if (isAoiScoped && aoiChildLayerId && aoiChildLayer) {
+        if (onMap) {
+          await switchAoiChildLayerToFirstItem({
+            childLayerId: aoiChildLayerId,
+            datasetId,
+            layerSnapshot: aoiChildLayer,
+          });
+        } else {
+          await switchAoiChildLayerToItem({
+            childLayerId: aoiChildLayerId,
+            datasetId,
+            stacItemId: item.stac_item_id,
+            layerSnapshot: aoiChildLayer,
+          });
         }
-        if (cfg.rendering_config) {
-          useMapLayersStore.getState().setLayerRenderingConfig(layerId, cfg.rendering_config);
+      } else {
+        if (!mapId) return;
+        if (onMap) {
+          await removeDatasetItemLayerFromMap({
+            mapId,
+            layerId: getDatasetItemLayerId(item.stac_item_id),
+          });
+        } else {
+          await addDatasetItemLayerToMap({
+            mapId,
+            datasetId,
+            item,
+          });
         }
-      } catch {
-        // Tile config not available yet
+        await queryClient.invalidateQueries({ queryKey: qk.maps.detail(mapId) });
+        toast.success(onMap ? 'Item removed from map' : 'Item added to map');
       }
-
-      // 4. Fly to item geometry
-      if (item.geometry) {
-        const map = getMapInstance();
-        if (map) {
-          try {
-            // eslint-disable-next-line @typescript-eslint/no-require-imports
-            const L = require('leaflet') as typeof import('leaflet');
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            const geoLayer = L.geoJSON(item.geometry as any);
-            map.fitBounds(geoLayer.getBounds(), { padding: [40, 40], maxZoom: 16 });
-          } catch {
-            // ignore fly-to errors
-          }
-        }
+      if (isAoiScoped) {
+        toast.success(onMap ? 'AOI item reset to default' : 'AOI item switched');
       }
-
-      queryClient.invalidateQueries({ queryKey: ['map-layers', mapId] });
-      toast.success(`Item added to map`);
     } catch {
-      toast.error('Failed to add item');
+      toast.error(onMap ? 'Failed to remove item' : 'Failed to add item');
     } finally {
-      setAddingItemId(null);
+      setActingItemId(null);
     }
   };
 
   // Check if an item is already on the map
-  const isOnMap = (stacItemId: string) => !!layers[`item-${stacItemId}`];
+  const isOnMap = (stacItemId: string) =>
+    isAoiScoped
+      ? aoiChildLayer?.stacItemId === stacItemId
+      : !!layers[getDatasetItemLayerId(stacItemId)];
 
   // Group items by date
   const itemsByDate = items.reduce<Record<string, DatasetItem[]>>((acc, item) => {
@@ -166,7 +168,7 @@ export function DatasetItemsPanel({ datasetId, mapId }: DatasetItemsPanelProps) 
           <div style={{ fontSize: 10, color: MC.textMuted }}>
             {items.length} item{items.length !== 1 ? 's' : ''}
             {items.length !== allItems.length && ` of ${allItems.length}`}
-            {' · Select individual files to overlay'}
+            {isAoiScoped ? ' · AOI-clipped item switcher' : ' · Select individual files to overlay'}
           </div>
         </div>
 
@@ -302,7 +304,7 @@ export function DatasetItemsPanel({ datasetId, mapId }: DatasetItemsPanelProps) 
               {/* Item rows */}
               {dateItems.map((item) => {
                 const onMap = isOnMap(item.stac_item_id);
-                const adding = addingItemId === item.id;
+                const acting = actingItemId === item.id;
 
                 return (
                   <div
@@ -324,7 +326,7 @@ export function DatasetItemsPanel({ datasetId, mapId }: DatasetItemsPanelProps) 
                         textOverflow: 'ellipsis',
                         whiteSpace: 'nowrap',
                       }} title={item.stac_item_id}>
-                        {item.stac_item_id}
+                        {datasetItemLabel(item)}
                       </div>
                       {item.datetime && (
                         <div style={{ fontSize: 10, color: MC.textMuted, marginTop: 1 }}>
@@ -335,19 +337,19 @@ export function DatasetItemsPanel({ datasetId, mapId }: DatasetItemsPanelProps) 
 
                     <button
                       onClick={() => {
-                        if (onMap || adding) return;
-                        addItemToMap(item);
+                        if (acting) return;
+                        void toggleItemOnMap(item, onMap);
                       }}
-                      disabled={onMap || adding}
+                      disabled={acting}
                       style={{
                         flexShrink: 0,
                         height: 26,
                         padding: '0 10px',
                         borderRadius: 4,
-                        border: `1px solid ${onMap ? MC.borderLight : MC.accent}`,
-                        background: onMap ? 'transparent' : MC.accentDim,
-                        color: onMap ? MC.textMuted : MC.accent,
-                        cursor: onMap || adding ? 'default' : 'pointer',
+                        border: `1px solid ${onMap ? MC.danger : MC.accent}`,
+                        background: onMap ? `${MC.danger}16` : MC.accentDim,
+                        color: onMap ? MC.danger : MC.accent,
+                        cursor: acting ? 'default' : 'pointer',
                         fontSize: 11,
                         fontWeight: 600,
                         display: 'flex',
@@ -356,13 +358,20 @@ export function DatasetItemsPanel({ datasetId, mapId }: DatasetItemsPanelProps) 
                         transition: 'all 0.1s',
                       }}
                     >
-                      {onMap ? 'On map' : adding ? (
+                      {acting ? (
                         <Loader size={10} style={{ animation: 'spin 1s linear infinite' }} />
                       ) : (
-                        <>
-                          <Map size={10} />
-                          Add
-                        </>
+                        onMap ? (
+                          <>
+                            <Trash2 size={10} />
+                            Remove
+                          </>
+                        ) : (
+                          <>
+                            <Map size={10} />
+                            Add
+                          </>
+                        )
                       )}
                     </button>
                   </div>

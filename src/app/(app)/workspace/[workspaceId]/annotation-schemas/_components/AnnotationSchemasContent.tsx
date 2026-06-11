@@ -222,16 +222,13 @@ export function AnnotationSchemasContent({ workspaceId: _workspaceId }: Annotati
       schemaId,
       classId,
       data: {
-        name: formData.name,
-        style: {
-          name: `${formData.name} Style`,
-          type: 'fill',
-          definition: {
-            fillColor: formData.fillColor,
-            strokeColor: formData.strokeColor,
-            strokeWidth: formData.strokeWidth,
-            fillOpacity: formData.fillOpacity,
-          },
+        name: `${formData.name} Style`,
+        type: 'polygon',
+        definition: {
+          fillColor: formData.fillColor,
+          strokeColor: formData.strokeColor,
+          strokeWidth: formData.strokeWidth,
+          fillOpacity: formData.fillOpacity,
         },
       },
     });

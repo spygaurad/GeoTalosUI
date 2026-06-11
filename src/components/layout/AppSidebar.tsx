@@ -95,7 +95,7 @@ export function AppSidebar({ workspaceId }: AppSidebarProps) {
             letterSpacing: '-0.01em',
           }}
         >
-          AwakeForest
+          GeoTalos
         </span>
       </div>
 

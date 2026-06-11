@@ -1,6 +1,6 @@
 import { PipelineBuilderLoader } from './_components/PipelineBuilderLoader';
 
-export const metadata = { title: 'Pipeline Builder — AwakeForest' };
+export const metadata = { title: 'Pipeline Builder — GeoTalos' };
 
 export default async function PipelineBuilderPage({
   params,

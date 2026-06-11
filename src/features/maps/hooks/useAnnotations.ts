@@ -214,7 +214,7 @@ export function useUpdateAnnotationClassStyle() {
       name?: string;
     }) =>
       annotationSchemasApi.updateClassStyle(schemaId, classId, {
-        style: style as any,
+        definition: (style ?? {}) as Record<string, unknown>,
         name,
       }),
     onSuccess: (updatedClass, variables) => {

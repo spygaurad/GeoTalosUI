@@ -137,6 +137,9 @@ export function NewAnnotationPanel({ mapId }: NewAnnotationPanelProps) {
   const [schemaDropdownOpen, setSchemaDropdownOpen] = useState(false);
   const [saved, setSaved] = useState(false);
   const savingRef = useRef(false);
+  /** Signature of the last save attempt, so a failed save does NOT auto-retry
+   *  in a loop. Cleared when the user explicitly (re)picks a class. */
+  const attemptedRef = useRef<string | null>(null);
   const classDropdownRef = useRef<HTMLDivElement>(null);
   const schemaDropdownRef = useRef<HTMLDivElement>(null);
 
@@ -236,6 +239,13 @@ export function NewAnnotationPanel({ mapId }: NewAnnotationPanelProps) {
   const doAutoSave = useCallback(() => {
     if (!drawnGeometry || !selectedClassId || !selectedSchemaId || !mapId || savingRef.current || saved) return;
 
+    // Only attempt once per (schema, class) selection. Without this, a failed
+    // request (which resets savingRef in onError) would re-fire every render
+    // because doAutoSave's identity changes with the mutation object.
+    const attemptKey = `${selectedSchemaId}:${selectedClassId}`;
+    if (attemptedRef.current === attemptKey) return;
+    attemptedRef.current = attemptKey;
+
     savingRef.current = true;
     const props: Record<string, unknown> = {};
     if (pending) {
@@ -245,9 +255,10 @@ export function NewAnnotationPanel({ mapId }: NewAnnotationPanelProps) {
     }
     const properties = Object.keys(props).length > 0 ? props : null;
 
-    // Use selected class name as set_name so each class gets its own annotation set
+    // Do NOT pass a per-class set_name: the backend accumulates all of this
+    // user's manual annotations for this (map, schema) into one mutable set,
+    // regardless of class. A set is single-schema but multi-class.
     const cls = classes.find((c) => c.id === selectedClassId);
-    const className = cls?.name;
 
     // Save to recent classes
     if (cls) {
@@ -255,7 +266,7 @@ export function NewAnnotationPanel({ mapId }: NewAnnotationPanelProps) {
     }
 
     saveToMapMutation.mutate(
-      { mapId, classId: selectedClassId, geometry: drawnGeometry, properties, schemaId: selectedSchemaId, setName: className },
+      { mapId, classId: selectedClassId, geometry: drawnGeometry, properties, schemaId: selectedSchemaId },
       { onSettled: () => { savingRef.current = false; } },
     );
   }, [drawnGeometry, selectedClassId, selectedSchemaId, saved, pending, mapId, saveToMapMutation, classes, saveRecentClass]);

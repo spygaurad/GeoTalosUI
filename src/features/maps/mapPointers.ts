@@ -100,6 +100,7 @@ export function getPointerType(layerType: LayerType, sourceType?: LayerSourceTyp
     'annotation': 'annotation',
     'tracking': 'tracking',
     'alert': 'alert',
+    'aoi': 'annotation',           // AOI uses annotation pointer style
   };
 
   if (layerType === 'dataset' && sourceType === 'stac_item') {

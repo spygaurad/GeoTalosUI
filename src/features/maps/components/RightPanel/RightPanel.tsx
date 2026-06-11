@@ -9,8 +9,11 @@ import { MeasurementPanel } from './MeasurementPanel';
 import { DatasetInfoPanel } from './DatasetInfoPanel';
 import { DatasetItemsPanel } from './DatasetItemsPanel';
 import { AnnotationSetPanel } from './AnnotationSetPanel';
+import { AnnotationDrawPanel } from './AnnotationDrawPanel';
+import { AoiPanel } from './AoiPanel';
 import { MC, MAP_Z } from '../../mapColors';
 import { useIsCompact } from '@/hooks/use-mobile';
+import type { Dataset } from '@/types/api';
 
 const PANEL_TITLES: Record<string, string> = {
   feature: 'Feature Info',
@@ -20,6 +23,8 @@ const PANEL_TITLES: Record<string, string> = {
   dataset: 'Dataset',
   items: 'Dataset Items',
   'annotation-set': 'Annotation Set',
+  'annotation-draw': 'Draw Annotation',
+  aoi: 'Area of Interest',
 };
 
 interface RightPanelProps {
@@ -27,15 +32,17 @@ interface RightPanelProps {
   bottomOffset: number;
   mapId?: string;
   projectId?: string;
+  datasets?: Dataset[];
 }
 
-export function RightPanel({ topOffset, bottomOffset, mapId, projectId }: RightPanelProps) {
+export function RightPanel({ topOffset, bottomOffset, mapId, projectId, datasets = [] }: RightPanelProps) {
   const rightPanelMode = useMapLayersStore((s) => s.rightPanelMode);
   const selectedFeature = useMapLayersStore((s) => s.selectedFeature);
   const selectedLayerId = useMapLayersStore((s) => s.selectedLayerId);
   const selectedDatasetId = useMapLayersStore((s) => s.selectedDatasetId);
   const selectedItemsDatasetId = useMapLayersStore((s) => s.selectedItemsDatasetId);
   const selectedAnnotationSetId = useMapLayersStore((s) => s.selectedAnnotationSetId);
+  const selectedAoiLayerId = useMapLayersStore((s) => s.selectedAoiLayerId);
   const closeRightPanel = useMapLayersStore((s) => s.closeRightPanel);
   const clearMeasurement = useMapLayersStore((s) => s.clearMeasurement);
   const layers = useMapLayersStore((s) => s.layers);
@@ -109,7 +116,7 @@ export function RightPanel({ topOffset, bottomOffset, mapId, projectId }: RightP
         {rightPanelMode === 'new-annotation' && <NewAnnotationPanel mapId={mapId} projectId={projectId} />}
         {rightPanelMode === 'measurement' && <MeasurementPanel />}
         {rightPanelMode === 'feature' && selectedFeature && (
-          <FeaturePropertiesPanel feature={selectedFeature} />
+          <FeaturePropertiesPanel feature={selectedFeature} mapId={mapId} />
         )}
         {rightPanelMode === 'style' && selectedLayerId && (
           <LayerStylePanel
@@ -124,7 +131,11 @@ export function RightPanel({ topOffset, bottomOffset, mapId, projectId }: RightP
           <DatasetItemsPanel datasetId={selectedItemsDatasetId} mapId={mapId} />
         )}
         {rightPanelMode === 'annotation-set' && selectedAnnotationSetId && (
-          <AnnotationSetPanel annotationSetId={selectedAnnotationSetId} />
+          <AnnotationSetPanel annotationSetId={selectedAnnotationSetId} mapId={mapId} />
+        )}
+        {rightPanelMode === 'annotation-draw' && <AnnotationDrawPanel />}
+        {rightPanelMode === 'aoi' && selectedAoiLayerId && (
+          <AoiPanel aoiLayerId={selectedAoiLayerId} mapId={mapId} />
         )}
       </div>
     </>

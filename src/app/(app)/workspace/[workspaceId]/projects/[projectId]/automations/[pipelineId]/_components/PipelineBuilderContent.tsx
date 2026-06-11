@@ -113,6 +113,8 @@ function toRfNodes(apiNodes: Array<Record<string, unknown>>): Node[] {
     type: 'pipeline',
     position: n.position as { x: number; y: number },
     data: n.data as Record<string, unknown>,
+    // Only the header strip drags the node — body & empty canvas pan the view
+    dragHandle: '.drag-handle__pipeline',
     width: n.width as number | undefined,
     height: n.height as number | undefined,
   }));
@@ -195,6 +197,11 @@ export function PipelineBuilderContent({
   const [rfInstance, setRfInstance] = useState<ReactFlowInstance | null>(null);
   const initializedRef = useRef(false);
   const savedViewportRef = useRef<{ x: number; y: number; zoom: number } | null>(null);
+  const [isDraggingOver, setIsDraggingOver] = useState(false);
+  const nodeCreationTimeRef = useRef<number>(0);
+  // Tracks the floating right-click menu (and its outside-click listener) so a
+  // new right-click can dismiss the previous one instead of stacking them.
+  const contextMenuRef = useRef<{ el: HTMLElement; cleanup: () => void } | null>(null);
 
   // Initialize graph from pipeline data once loaded
   useEffect(() => {
@@ -281,22 +288,61 @@ export function PipelineBuilderContent({
     };
   }, [nodes, edges, rfInstance]);
 
+  // ── Derive pipeline-level trigger from the Trigger node's config ──────────
+  // The backend schedules pipelines from pipeline.trigger_type/trigger_config
+  // (Celery Beat reads these on startup), NOT from the node graph. Bridge the
+  // Trigger node's mode/cron here so a "Recurring"/"Once" node actually fires.
+  const deriveTrigger = useCallback((): {
+    trigger_type: 'manual' | 'schedule';
+    trigger_config: Record<string, unknown> | null;
+  } => {
+    const triggerNode = nodes.find(
+      (n) => (n.data as PipelineNodeData).nodeType === 'trigger',
+    );
+    const cfg = (triggerNode?.data as PipelineNodeData | undefined)?.config ?? {};
+    const mode = cfg.mode as string | undefined;
+    const timezone = (cfg.timezone as string) || 'UTC';
+
+    if (mode === 'recurring') {
+      const cron = (cfg.cron_expression as string | undefined)?.trim();
+      if (cron) {
+        return { trigger_type: 'schedule', trigger_config: { cron_expression: cron, timezone } };
+      }
+    }
+    if (mode === 'once') {
+      // No year field in cron, so encode the exact minute (UTC) and let the
+      // backend stop the pipeline after the first fire via `run_once`.
+      const runAt = cfg.run_at as string | undefined;
+      const d = runAt ? new Date(runAt) : null;
+      if (d && !Number.isNaN(d.getTime())) {
+        const cron = `${d.getUTCMinutes()} ${d.getUTCHours()} ${d.getUTCDate()} ${d.getUTCMonth() + 1} *`;
+        return {
+          trigger_type: 'schedule',
+          trigger_config: { cron_expression: cron, timezone: 'UTC', run_once: true },
+        };
+      }
+    }
+    return { trigger_type: 'manual', trigger_config: null };
+  }, [nodes]);
+
   // ── Save mutation (create for new, update for existing) ────────────────
   const saveMutation = useMutation({
     mutationFn: async () => {
       const graph = buildGraph();
+      const trigger = deriveTrigger();
 
       if (!savedId) {
         const created = await automationApi.createPipeline({
           name: localName || 'Untitled Pipeline',
           project_id: projectId,
-          trigger_type: 'manual',
+          trigger_type: trigger.trigger_type,
+          trigger_config: trigger.trigger_config ?? undefined,
           graph,
         });
         return created;
       }
 
-      return automationApi.updatePipeline(savedId, { graph });
+      return automationApi.updatePipeline(savedId, { graph, ...trigger });
     },
     onSuccess: (result) => {
       setIsDirty(false);
@@ -321,13 +367,15 @@ export function PipelineBuilderContent({
   const runMutation = useMutation({
     mutationFn: async () => {
       let runId = savedId;
+      const trigger = deriveTrigger();
 
       if (!runId) {
         const graph = buildGraph();
         const created = await automationApi.createPipeline({
           name: localName || 'Untitled Pipeline',
           project_id: projectId,
-          trigger_type: 'manual',
+          trigger_type: trigger.trigger_type,
+          trigger_config: trigger.trigger_config ?? undefined,
           graph,
         });
         runId = created.id;
@@ -337,7 +385,7 @@ export function PipelineBuilderContent({
         );
       } else {
         const graph = buildGraph();
-        await automationApi.updatePipeline(runId, { graph });
+        await automationApi.updatePipeline(runId, { graph, ...trigger });
       }
 
       // Validate before running (#4)
@@ -427,28 +475,17 @@ export function PipelineBuilderContent({
     [setEdges],
   );
 
-  const onDragOver = useCallback((e: DragEvent) => {
-    e.preventDefault();
-    e.dataTransfer.dropEffect = 'move';
-  }, []);
-
-  const onDrop = useCallback(
-    (e: DragEvent) => {
-      e.preventDefault();
-      const raw = e.dataTransfer.getData('application/reactflow-node');
-      if (!raw || !rfInstance) return;
-
-      const entry: NodeCatalogEntry = JSON.parse(raw);
-      const position = rfInstance.screenToFlowPosition({
-        x: e.clientX,
-        y: e.clientY,
-      });
-
-      // Use crypto.randomUUID for collision-safe node IDs (#8)
+  // Helper: create node from catalog entry at given position
+  const createNodeFromEntry = useCallback(
+    (entry: NodeCatalogEntry, position: { x: number; y: number }) => {
       const newNode: Node = {
         id: crypto.randomUUID(),
         type: 'pipeline',
         position,
+        selected: false, // Don't auto-select to prevent immediate drag
+        draggable: false, // Prevent dragging immediately after creation
+        // Only the header strip drags the node — body & empty canvas pan the view
+        dragHandle: '.drag-handle__pipeline',
         data: {
           nodeType: entry.type,
           label: entry.label,
@@ -464,14 +501,188 @@ export function PipelineBuilderContent({
       };
 
       setNodes((nds) => [...nds, newNode]);
+
+      // Record creation time to prevent drag on newly created nodes
+      nodeCreationTimeRef.current = Date.now();
+
+      // Re-enable dragging after a short delay
+      setTimeout(() => {
+        setNodes((nds) =>
+          nds.map((n) =>
+            n.id === newNode.id ? { ...n, draggable: true } : n,
+          ),
+        );
+      }, 200);
     },
-    [rfInstance, setNodes],
+    [setNodes],
   );
+
+  const onDragOver = useCallback((e: DragEvent) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    setIsDraggingOver(true);
+  }, []);
+
+  const onDragLeave = useCallback(() => {
+    setIsDraggingOver(false);
+  }, []);
+
+  const onDrop = useCallback(
+    (e: DragEvent) => {
+      e.preventDefault();
+      setIsDraggingOver(false);
+      const raw = e.dataTransfer.getData('application/reactflow-node');
+      if (!raw || !rfInstance) return;
+
+      const entry: NodeCatalogEntry = JSON.parse(raw);
+      const position = rfInstance.screenToFlowPosition({
+        x: e.clientX,
+        y: e.clientY,
+      });
+
+      createNodeFromEntry(entry, position);
+    },
+    [rfInstance, createNodeFromEntry],
+  );
+
+  // Context menu for canvas right-click (#18)
+  const onCanvasContextMenu = useCallback(
+    (e: React.MouseEvent) => {
+      e.preventDefault();
+
+      // Tear down any menu still open from a previous right-click so menus
+      // don't stack on top of each other.
+      contextMenuRef.current?.cleanup();
+      contextMenuRef.current = null;
+
+      if (!catalog?.categories || !rfInstance) return;
+
+      const position = rfInstance.screenToFlowPosition({
+        x: e.clientX,
+        y: e.clientY,
+      });
+
+      // Show context menu with quick-add options
+      const quickNodes = catalog.categories
+        .flatMap((cat) => cat.nodes)
+        .filter((n) => !isDisplayNode(n.type) && n.status !== 'placeholder')
+        .slice(0, 12); // Top 12 most common
+
+      if (quickNodes.length === 0) return;
+
+      // Create a simple floating menu (for production, use a proper context menu library)
+      const menuEl = document.createElement('div');
+      menuEl.style.cssText = `
+        position: fixed;
+        left: ${e.clientX}px;
+        top: ${e.clientY}px;
+        background: white;
+        border: 1px solid #d4c0a8;
+        border-radius: 6px;
+        box-shadow: 0 4px 12px rgba(46,52,40,0.15);
+        z-index: 50;
+        min-width: 180px;
+        max-height: 400px;
+        overflow-y: auto;
+      `;
+
+      quickNodes.forEach((entry) => {
+        const item = document.createElement('button');
+        item.textContent = entry.label;
+        item.style.cssText = `
+          display: block;
+          width: 100%;
+          text-align: left;
+          padding: 8px 12px;
+          border: none;
+          background: transparent;
+          cursor: pointer;
+          font-size: 12px;
+          color: #2e3428;
+          border-bottom: 1px solid #ede0d4;
+          transition: background-color 0.15s;
+        `;
+        item.onmouseenter = () => {
+          item.style.backgroundColor = '#f5ede0';
+        };
+        item.onmouseleave = () => {
+          item.style.backgroundColor = 'transparent';
+        };
+        item.onmousedown = (ev) => {
+          ev.preventDefault();
+          ev.stopPropagation();
+          ev.stopImmediatePropagation();
+        };
+        item.onclick = (ev) => {
+          ev.preventDefault();
+          ev.stopPropagation();
+          ev.stopImmediatePropagation();
+          createNodeFromEntry(entry, position);
+          contextMenuRef.current?.cleanup();
+          contextMenuRef.current = null;
+        };
+        menuEl.appendChild(item);
+      });
+
+      // Prevent menu from being closed immediately by the document click handler
+      menuEl.onmousedown = (ev) => {
+        ev.stopPropagation();
+        ev.stopImmediatePropagation();
+      };
+      menuEl.onclick = (ev) => {
+        ev.stopPropagation();
+        ev.stopImmediatePropagation();
+      };
+
+      document.body.appendChild(menuEl);
+
+      // Single cleanup that removes the menu and unbinds its listeners. Stored
+      // on the ref so the next right-click (or a selection) can invoke it.
+      const cleanup = () => {
+        document.removeEventListener('click', closeMenu);
+        if (document.body.contains(menuEl)) {
+          document.body.removeChild(menuEl);
+        }
+      };
+
+      // Remove menu on click outside (but not on the menu itself)
+      function closeMenu(event: MouseEvent) {
+        if (menuEl.contains(event.target as HTMLElement)) return;
+        cleanup();
+        contextMenuRef.current = null;
+      }
+
+      contextMenuRef.current = { el: menuEl, cleanup };
+
+      // Add a small delay to allow the menu to render before listening for clicks
+      setTimeout(() => {
+        document.addEventListener('click', closeMenu);
+      }, 50);
+    },
+    [catalog, rfInstance, createNodeFromEntry],
+  );
+
+  // Remove any open right-click menu when the builder unmounts.
+  useEffect(() => () => {
+    contextMenuRef.current?.cleanup();
+    contextMenuRef.current = null;
+  }, []);
 
   // ── Derived state ────────────────────────────────────────────────────────
   const pipelineName = localName || pipeline?.name || (isNew ? 'New Pipeline' : 'Loading...');
   const pipelineStatus = pipeline?.status ?? 'draft';
   const categories = catalog?.categories ?? [];
+
+  // Quick-add menu entries: top common nodes (triggers, data sources, output)
+  const quickAddEntries = catalog?.categories
+    ?.flatMap((cat) => cat.nodes)
+    .filter(
+      (n) =>
+        !isDisplayNode(n.type) &&
+        n.status !== 'placeholder' &&
+        ['triggers', 'data_source', 'output', 'map_overlay'].includes(n.category),
+    )
+    .slice(0, 10) ?? [];
 
   // ── Loading / error states (#16) ──────────────────────────────────────────
   if (pipelineLoading && !isNew) {
@@ -511,7 +722,7 @@ export function PipelineBuilderContent({
   }
 
   return (
-    <PipelineProvider projectId={projectId} workspaceId={workspaceId}>
+    <PipelineProvider projectId={projectId} workspaceId={workspaceId} pipelineId={savedId}>
     <div className="flex flex-col h-full overflow-hidden">
       <PipelineToolbar
         pipelineName={pipelineName}
@@ -526,6 +737,15 @@ export function PipelineBuilderContent({
         onZoomIn={() => rfInstance?.zoomIn()}
         onZoomOut={() => rfInstance?.zoomOut()}
         onFitView={() => rfInstance?.fitView({ padding: 0.2 })}
+        onQuickAdd={(entry) => {
+          if (!rfInstance) return;
+          const position = rfInstance.screenToFlowPosition({
+            x: window.innerWidth / 2,
+            y: window.innerHeight / 2,
+          });
+          createNodeFromEntry(entry, position);
+        }}
+        quickAddEntries={quickAddEntries}
         isSaving={saveMutation.isPending}
         isRunning={runMutation.isPending}
       />
@@ -539,8 +759,13 @@ export function PipelineBuilderContent({
 
         <div
           ref={reactFlowWrapper}
-          className="flex-1 relative"
-          style={{ backgroundColor: '#f5ede0' }}
+          className="flex-1 relative transition-colors"
+          style={{
+            backgroundColor: isDraggingOver ? '#f0e8d4' : '#f5ede0',
+            borderTop: isDraggingOver ? '2px solid #c4985c' : 'none',
+          }}
+          onContextMenu={onCanvasContextMenu}
+          onDragLeave={onDragLeave}
         >
           <ReactFlow
             nodes={nodes}
@@ -563,7 +788,7 @@ export function PipelineBuilderContent({
             }}
             connectionLineStyle={{ stroke: '#c4985c', strokeWidth: 1.5 }}
             proOptions={{ hideAttribution: true }}
-            style={{ backgroundColor: '#f5ede0' }}
+            style={{ backgroundColor: isDraggingOver ? '#f0e8d4' : '#f5ede0' }}
           >
             <Background
               variant={BackgroundVariant.Dots}
@@ -586,7 +811,7 @@ export function PipelineBuilderContent({
           <div className="absolute bottom-3 left-3 flex items-center gap-3" style={{ zIndex: 10 }}>
             <EdgeLegend />
             <span style={{ fontSize: '10px', fontStyle: 'italic', color: '#b0a090' }}>
-              Drag nodes onto the canvas
+              Drag nodes or right-click to add
             </span>
           </div>
         </div>

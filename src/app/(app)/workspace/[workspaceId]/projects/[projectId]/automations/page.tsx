@@ -1,6 +1,6 @@
 import { AutomationsContent } from './_components/AutomationsContent';
 
-export const metadata = { title: 'Automations — AwakeForest' };
+export const metadata = { title: 'Automations — GeoTalos' };
 
 export default async function AutomationsPage({
   params,

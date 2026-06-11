@@ -7,7 +7,7 @@ import type { PaginatedResponse } from '@/types/common';
 
 export interface DatasetCreatePayload {
   name: string;
-  dataset_type: 'raster' | 'vector';
+  dataset_type: 'imagery' | 'segmentation_mask';
 }
 
 export interface DatasetListParams {
@@ -201,6 +201,41 @@ export const datasetsApi = {
   getDownloadUrl: (id: string) =>
     apiClient.get(EP.datasets.downloadUrl(id)).json<{ download_url: string }>(),
 
+  /** GET /datasets/{id}/raster-values — unique pixel values read live from the
+   *  mask raster (mirrors the annotation-set raster-mask preview). */
+  getRasterValues: (id: string, bandIndex = 1) =>
+    apiClient
+      .get(EP.datasets.rasterValues(id), {
+        searchParams: { band_index: String(bandIndex) },
+      })
+      .json<{
+        dataset_id: string;
+        dataset_item_id: string;
+        band_index: number;
+        values: number[];
+        total_unique: number;
+        truncated: boolean;
+      }>(),
+
+  /** PATCH /datasets/{id}/class-map — associate segmentation-mask pixel values
+   *  with annotation classes (colors are derived client-side from the classes). */
+  saveClassMap: (
+    id: string,
+    data: {
+      schema_id: string;
+      value_class_map: Record<string, string>;
+      band_index?: number;
+      nodata_value?: number | null;
+    },
+  ) =>
+    apiClient.patch(EP.datasets.classMap(id), { json: data }).json<{
+      dataset_id: string;
+      schema_id: string;
+      band_index: number;
+      nodata_value: number | null;
+      value_class_map: Record<string, string>;
+    }>(),
+
   // ── Multipart upload flow ──────────────────────────────────────────────────
   //
   //  Step 1  POST /datasets                           → dataset_id
@@ -273,12 +308,12 @@ export const datasetsApi = {
       })
       .json<MosaicTileJsonResponse>(),
 
-  /** POST /tiles/mosaic/multi-item/tilejson — mosaic of specific items */
-  getMultiItemTileJson: (itemIds: string[], assets: string[] = ['data']) =>
+  /** POST /tiles/mosaic/multi-item/tilejson — mosaic of specific STAC items by stac_item_id */
+  getMultiItemTileJson: (stacItemIds: string[], assets: string[] = ['data']) =>
     apiClient
       .post(EP.tiles.multiItemTileJson, {
         json: {
-          item_ids: itemIds,
+          item_ids: stacItemIds,
           assets: assets.join(','),
         },
       })

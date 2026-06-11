@@ -8,13 +8,13 @@ export default function AuthLayout({ children }: { children: React.ReactNode }) 
       <div className="px-6 py-4">
         <Link href="/" className="inline-flex items-center gap-2.5 group">
           <img
-            src="/AwakeForest_logo.png"
-            alt="AwakeForest"
+            src="/GeoTalos_logo.png"
+            alt="GeoTalos"
             className="h-8 w-auto object-contain"
           />
           <div className="leading-tight">
             <span className="text-base font-bold text-primary-600 group-hover:text-primary-700 transition-colors">
-              AwakeForest
+              GeoTalos
             </span>
             <p className="text-[10px] text-gray-400 leading-none">Forest Management</p>
           </div>
@@ -30,7 +30,7 @@ export default function AuthLayout({ children }: { children: React.ReactNode }) 
 
       {/* Footer */}
       <div className="py-4 text-center text-xs text-gray-400">
-        &copy; {new Date().getFullYear()} AwakeForest
+        &copy; {new Date().getFullYear()} GeoTalos
       </div>
     </div>
   );

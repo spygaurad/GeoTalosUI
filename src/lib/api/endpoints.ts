@@ -41,9 +41,34 @@ export const EP = {
     layers: (mapId: string) => `maps/${mapId}/layers`,
     layerDetail: (mapId: string, layerId: string) => `maps/${mapId}/layers/${layerId}`,
     layersReorder: (mapId: string) => `maps/${mapId}/layers/reorder`,
+    /** GET /maps/{map_id}/datasets — datasets attached to the map */
+    datasets: (mapId: string) => `maps/${mapId}/datasets`,
+    /** GET /maps/{map_id}/aoi/resources?bbox=… — datasets + items + vectors + raster masks in AOI bbox */
+    aoiResources: (mapId: string) => `maps/${mapId}/aoi/resources`,
+    /** GET /maps/{map_id}/datasets/{dataset_id}/items/in-aoi?bbox=… — dataset items intersecting AOI */
+    datasetItemsInAoi: (mapId: string, datasetId: string) =>
+      `maps/${mapId}/datasets/${datasetId}/items/in-aoi`,
+    /** GET /maps/{map_id}/datasets/{dataset_id}/preview?bbox=… — TiTiler PNG/JPEG clipped to AOI */
+    datasetPreview: (mapId: string, datasetId: string) =>
+      `maps/${mapId}/datasets/${datasetId}/preview`,
+    /** GET /maps/{map_id}/datasets/{dataset_id}/items/{item_id}/preview?bbox=… — single item preview */
+    datasetItemPreview: (mapId: string, datasetId: string, itemId: string) =>
+      `maps/${mapId}/datasets/${datasetId}/items/${itemId}/preview`,
+  },
+
+  mapAois: {
+    list: (mapId: string) => `maps/${mapId}/aois`,
+    detail: (mapId: string, aoiId: string) => `maps/${mapId}/aois/${aoiId}`,
+    selection: (mapId: string, aoiId: string) => `maps/${mapId}/aois/${aoiId}/selection`,
+    rendering: (mapId: string, aoiId: string) => `maps/${mapId}/aois/${aoiId}/rendering`,
+    timeline: (mapId: string, aoiId: string) => `maps/${mapId}/aois/${aoiId}/timeline`,
+    timelinePrepare: (mapId: string, aoiId: string) => `maps/${mapId}/aois/${aoiId}/timeline/prepare`,
+    tileJson: (mapId: string, aoiId: string) => `maps/${mapId}/aois/${aoiId}/tilejson`,
+    inference: (mapId: string, aoiId: string) => `maps/${mapId}/aois/${aoiId}/inference`,
   },
 
   jobs: {
+    inference: 'jobs/inference',
     detail: (id: string) => `jobs/${id}`,
     retry: (id: string) => `jobs/${id}/retry`,
   },
@@ -67,6 +92,10 @@ export const EP = {
       `datasets/${datasetId}/items/by-stac-id/${stacItemId}/tile-config`,
     downloadUrl: (id: string) => `datasets/${id}/download-url`,
     tileJson: (id: string) => `datasets/${id}/tilejson`,
+    /** GET /datasets/{id}/raster-values — unique pixel values of a segmentation mask (live read) */
+    rasterValues: (id: string) => `datasets/${id}/raster-values`,
+    /** PATCH /datasets/{id}/class-map — store value→class mapping for a segmentation mask */
+    classMap: (id: string) => `datasets/${id}/class-map`,
     // Multipart upload flow — correct nested paths per API docs:
     //   Step 1: POST /datasets              → create metadata record → dataset_id
     //   Step 2: POST /datasets/{id}/uploads/initiate → start multipart upload
@@ -110,14 +139,45 @@ export const EP = {
 
   annotationSets: {
     listByProject: (projectId: string) => `projects/${projectId}/annotation-sets`,
+    listByOrg: () => `annotation-sets`,
     listByMap: (mapId: string) => `maps/${mapId}/annotation-sets`,
+    /** Attach a set to a map (creates the mount so the layer persists). */
+    mount: (mapId: string) => `maps/${mapId}/annotation-sets/mount`,
+    /** Detach a set from a map (removes the mount; does NOT delete the set). */
+    unmount: (mapId: string, setId: string) =>
+      `maps/${mapId}/annotation-sets/${setId}/unmount`,
     detail: (id: string) => `annotation-sets/${id}`,
+    reviewStatus: (id: string) => `annotation-sets/${id}/review-status`,
+    tiles: (id: string) => `annotation-sets/${id}/tiles/{z}/{x}/{y}.pbf`,
+    bounds: (id: string) => `annotation-sets/${id}/bounds`,
     features: (id: string) => `annotation-sets/${id}/features`,
+    import: (id: string) => `annotation-sets/${id}/import`,
+    createStandalone: () => `annotation-sets`,
     addAnnotation: (id: string) => `annotation-sets/${id}/annotations`,
     annotationDetail: (setId: string, annId: string) =>
       `annotation-sets/${setId}/annotations/${annId}`,
+    /** Promote a single annotation into the map's human-verified set. */
+    verifyAnnotation: (setId: string, annId: string) =>
+      `annotation-sets/${setId}/annotations/${annId}/verify`,
     /** Auto-resolves annotation set — creates one if needed. */
     addAnnotationOnMap: (mapId: string) => `maps/${mapId}/annotations`,
+    /** Preview unique pixel values in a raster band for value→class mapping. */
+    rasterValues: (setId: string) => `annotation-sets/${setId}/raster/values`,
+    /** Save (or update) the raster class-value mapping config for a set. */
+    rasterConfig: (setId: string) => `annotation-sets/${setId}/raster/config`,
+  },
+
+  annotationSetCollections: {
+    list: 'annotation-set-collections',
+    create: 'annotation-set-collections',
+    detail: (id: string) => `annotation-set-collections/${id}`,
+    update: (id: string) => `annotation-set-collections/${id}`,
+    delete: (id: string) => `annotation-set-collections/${id}`,
+    /** Sets belonging to a collection (paginated). */
+    sets: (id: string) => `annotation-set-collections/${id}/annotation-sets`,
+    /** Remove one set from the collection (does NOT delete the set). */
+    removeSet: (id: string, setId: string) =>
+      `annotation-set-collections/${id}/annotation-sets/${setId}`,
   },
 
   annotationSchemas: {
@@ -175,6 +235,8 @@ export const EP = {
 
   inference: {
     run: 'inference',
+    adapters: 'inference/adapters',
+    adapterSchema: (name: string) => `inference/adapters/${name}/schema`,
   },
 
   analysis: {

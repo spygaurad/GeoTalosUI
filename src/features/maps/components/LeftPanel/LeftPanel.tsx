@@ -1,7 +1,10 @@
 'use client';
 
-import { useState, useCallback } from 'react';
-import { Layers, ChevronLeft, ChevronRight, ChevronDown } from 'lucide-react';
+import { useState, useCallback, useMemo, useEffect } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
+import { Layers, ChevronLeft, ChevronRight, ChevronDown, Plus } from 'lucide-react';
+import { AnnotationSetPicker } from './AnnotationSetPicker';
+import type { AnnotationSet as ApiAnnotationSet, AnnotationClass } from '@/types/api';
 import {
   DndContext,
   closestCenter,
@@ -16,12 +19,33 @@ import {
 } from '@dnd-kit/sortable';
 import { restrictToVerticalAxis } from '@dnd-kit/modifiers';
 import { LayerCard } from './LayerCard';
-import type { Dataset, Annotation, TrackedObject, Alert, AnnotationSet } from '@/types/api';
+import type { Dataset, Annotation, TrackedObject, Alert, AnnotationSetMount } from '@/types/api';
 import { useMapLayersStore } from '@/stores/mapLayersStore';
+import { qk } from '@/lib/query-keys';
+import { annotationSchemasApi } from '@/lib/api/annotation-schemas';
+import { annotationClassesApi } from '@/lib/api/annotation-classes';
+import { flyToAnnotationSet } from '../../utils/annotationSetMap';
+import { buildClassStyles, resolveClassStyle } from '../../utils/annotationStyles';
+import { annotationSetsApi, buildRasterTileUrl } from '@/lib/api/annotation-sets';
+import { datasetsApi } from '@/lib/api/datasets';
 import { MC, MAP_Z } from '../../mapColors';
 import { useIsCompact } from '@/hooks/use-mobile';
+import { asNonEmptyText, getClassDescription } from '@/features/maps/utils/mapTextUtils';
+import {
+  findContainingAoiId,
+  type AoiCandidate,
+  type Bbox,
+} from '@/features/maps/utils/annotationSetHierarchy';
 
 type PanelTab = 'layers' | 'legend';
+const CLASS_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+interface LegendClassItem {
+  key: string;
+  color: string;
+  label: string;
+  description?: string;
+}
 
 export interface LeftPanelProps {
   open: boolean;
@@ -34,9 +58,10 @@ export interface LeftPanelProps {
   annotations: Annotation[];
   trackedObjects: TrackedObject[];
   alerts: Alert[];
-  annotationSets?: AnnotationSet[];
+  annotationSets?: AnnotationSetMount[];
   onRemoveDataset?: (datasetId: string) => void;
   onRemoveAnnotationSet?: (setId: string) => void;
+  onRemoveAoi?: (aoiLayerId: string) => void;
   onRenameAnnotationSet?: (setId: string, newName: string) => void;
 }
 
@@ -45,6 +70,7 @@ export function LeftPanel({
   onToggle,
   topOffset,
   bottomOffset,
+  projectId,
   mapId,
   datasets,
   annotations,
@@ -53,12 +79,112 @@ export function LeftPanel({
   annotationSets = [],
   onRemoveDataset,
   onRemoveAnnotationSet,
+  onRemoveAoi,
   onRenameAnnotationSet,
 }: LeftPanelProps) {
   const [tab, setTab] = useState<PanelTab>('layers');
+  // Which AOI layers are expanded to reveal their nested child layers.
+  // Default collapsed so the list stays tidy until the user opts in.
+  const [expandedAois, setExpandedAois] = useState<Record<string, boolean>>({});
   const isCompact = useIsCompact();
+  const queryClient = useQueryClient();
+  const [legendClassMeta, setLegendClassMeta] = useState<Record<string, { name: string; description?: string }>>({});
   const layers = useMapLayersStore((s) => s.layers);
   const applyReorder = useMapLayersStore((s) => s.applyReorder);
+  const removeLayer = useMapLayersStore((s) => s.removeLayer);
+  const addAnnotationSetLayer = useMapLayersStore((s) => s.addAnnotationSetLayer);
+
+  // Picker state — `mode` drives which filters the picker uses.
+  type PickerMode =
+    | { kind: 'standalone' }
+    | { kind: 'dataset'; datasetId: string; parentLayerId: string }
+    | { kind: 'stacItem'; stacItemId: string; parentLayerId: string };
+  const [picker, setPicker] = useState<PickerMode | null>(null);
+
+  const handlePickSet = useCallback(
+    async (s: ApiAnnotationSet) => {
+      let schemaClasses =
+        s.schema?.classes ??
+        (s.schema_id
+          ? queryClient.getQueryData<{ items: AnnotationClass[] }>(
+              qk.annotationSchemas.classes(s.schema_id)
+            )?.items
+          : undefined);
+
+      // If schema classes not available from cache, fetch them now
+      if (!schemaClasses && s.schema_id) {
+        try {
+          const resp = await annotationSchemasApi.getClasses(s.schema_id);
+          schemaClasses = resp.items;
+          // Cache for future use
+          queryClient.setQueryData(qk.annotationSchemas.classes(s.schema_id), resp);
+        } catch {
+          // Silently fail — will use default fallback colors
+        }
+      }
+
+      const classStyles = buildClassStyles(schemaClasses);
+
+      // Check if this annotation set is a raster segmentation mask.
+      // If it has a saved raster config, render it as an authenticated raster tile layer.
+      const rasterConfig = await annotationSetsApi.getRasterConfig(s.id);
+      const isRasterMask = !!rasterConfig;
+      const rasterTileUrl = rasterConfig ? buildRasterTileUrl(rasterConfig) : undefined;
+
+      if (!picker) return;
+      let layerId: string;
+      if (picker.kind === 'standalone') {
+        layerId = addAnnotationSetLayer({ setId: s.id, name: s.name, classStyles, isRasterMask, tileUrl: rasterTileUrl });
+      } else if (picker.kind === 'dataset') {
+        layerId = addAnnotationSetLayer({
+          setId: s.id,
+          name: s.name,
+          classStyles,
+          parentLayerId: picker.parentLayerId,
+          datasetId: picker.datasetId,
+          isRasterMask,
+          tileUrl: rasterTileUrl,
+        });
+      } else {
+        layerId = addAnnotationSetLayer({
+          setId: s.id,
+          name: s.name,
+          classStyles,
+          parentLayerId: picker.parentLayerId,
+          stacItemId: picker.stacItemId,
+          isRasterMask,
+          tileUrl: rasterTileUrl,
+        });
+      }
+      // Persist the layer on the backend via the mount endpoint — symmetric with
+      // removal's unmount. This is the single source `listByMap` reads back on
+      // reload, so adding a set now survives a refresh. The mount is idempotent
+      // server-side, so re-adding an already-mounted set is a no-op.
+      if (mapId) {
+        const created = useMapLayersStore.getState().layers[layerId];
+        void annotationSetsApi
+          .mount(mapId, {
+            annotation_set_id: s.id,
+            visible: created?.visible ?? true,
+            opacity: created?.opacity ?? 1,
+            z_index: created?.zIndex ?? 0,
+          })
+          .then(() =>
+            queryClient.invalidateQueries({ queryKey: qk.annotationSets.listByMap(mapId) }),
+          )
+          .catch(() => {
+            // Layer still shows locally; it just won't persist until the next add.
+          });
+      }
+
+      // For vector annotation sets, zoom to the annotation bounds.
+      // Raster masks don't have annotations so skip the fly-to.
+      if (!isRasterMask) {
+        void flyToAnnotationSet(layerId, s.id);
+      }
+    },
+    [picker, addAnnotationSetLayer, queryClient, mapId],
+  );
 
   const annotationsByLabel = annotations.reduce<Record<string, Annotation[]>>((acc, a) => {
     if (!acc[a.label]) acc[a.label] = [];
@@ -71,12 +197,179 @@ export function LeftPanel({
     Object.keys(annotationsByLabel).length +
     trackedObjects.length +
     alerts.length;
+  const annotationSetById = useMemo(
+    () => new Map(annotationSets.map((set) => [set.annotation_set_id, set])),
+    [annotationSets],
+  );
+  // Mount rows carry only schema_id (no embedded schema/classes), so there's
+  // nothing to pre-seed here — legend class metadata is fetched on demand for
+  // every class id found in layer.classStyles below.
+  const schemaClassIds = useMemo(() => new Set<string>(), []);
+  const legendClassIdsToFetch = useMemo(() => {
+    const ids = new Set<string>();
+    for (const layer of Object.values(layers)) {
+      if (layer.sourceType !== 'annotation_set' || !layer.classStyles) continue;
+      for (const classKey of Object.keys(layer.classStyles)) {
+        if (!CLASS_ID_RE.test(classKey)) continue;
+        if (legendClassMeta[classKey]) continue;
+        if (schemaClassIds.has(classKey)) continue;
+        ids.add(classKey);
+      }
+    }
+    return [...ids];
+  }, [layers, legendClassMeta, schemaClassIds]);
 
-  // ── Build a flat, z_index-sorted layer list for the "all layers" view ──
-  // Item layers (item-*) are nested inside their parent dataset card, not shown top-level
-  const sortedLayerEntries = Object.entries(layers)
+  useEffect(() => {
+    if (legendClassIdsToFetch.length === 0) return;
+    let cancelled = false;
+    Promise.allSettled(
+      legendClassIdsToFetch.map((classId) => annotationClassesApi.get(classId)),
+    ).then((results) => {
+      if (cancelled) return;
+      setLegendClassMeta((prev) => {
+        const next = { ...prev };
+        for (const result of results) {
+          if (result.status !== 'fulfilled') continue;
+          const cls = result.value;
+          next[cls.id] = {
+            name: cls.name,
+            description: asNonEmptyText(cls.description) ?? getClassDescription(cls),
+          };
+        }
+        return next;
+      });
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [legendClassIdsToFetch]);
+
+  const loadedAnnotationLegendSections = useMemo(() => {
+    const sections: Array<{ layerId: string; title: string; description?: string; classes: LegendClassItem[] }> = [];
+    for (const [layerId, layer] of Object.entries(layers)) {
+      if (layer.sourceType !== 'annotation_set') continue;
+      const setId = layer.annotationSetId ?? (layerId.startsWith('annset-') ? layerId.slice(7) : undefined);
+      const annSet = setId ? annotationSetById.get(setId) : undefined;
+      // Mount rows have no embedded schema; class rows come from layer.classStyles
+      // + fetched legendClassMeta (the fallback block below).
+      const schemaClasses: AnnotationClass[] = [];
+      const classRows: LegendClassItem[] = [];
+
+      for (const cls of schemaClasses) {
+        const resolved = resolveClassStyle(layer.classStyles, cls.id);
+        classRows.push({
+          key: cls.id,
+          color: resolved?.fillColor ?? cls.style?.definition?.fillColor ?? MC.accent,
+          label: cls.name || cls.path || legendClassMeta[cls.id]?.name || `Class ${cls.id.slice(0, 8)}`,
+          description: getClassDescription(cls) ?? legendClassMeta[cls.id]?.description,
+        });
+      }
+
+      if (classRows.length === 0 && layer.classStyles) {
+        const allEntries = Object.entries(layer.classStyles);
+        const uuidEntries = allEntries.filter(([key]) => CLASS_ID_RE.test(key));
+        const sourceEntries = uuidEntries.length > 0 ? uuidEntries : allEntries;
+        const seen = new Set<string>();
+        for (const [key, style] of sourceEntries) {
+          const meta = CLASS_ID_RE.test(key) ? legendClassMeta[key] : undefined;
+          const label = meta?.name ?? (CLASS_ID_RE.test(key) ? `Class ${key.slice(0, 8)}` : key);
+          const dedupeKey = `${label}|${style.fillColor}`;
+          if (seen.has(dedupeKey)) continue;
+          seen.add(dedupeKey);
+          classRows.push({
+            key,
+            color: style.fillColor,
+            label,
+            description: meta?.description,
+          });
+        }
+      }
+
+      const title =
+        asNonEmptyText(layer.name) ??
+        asNonEmptyText(annSet?.set_name) ??
+        (setId ? `Annotation set ${setId.slice(0, 8)}` : 'Annotation set');
+      const rasterSuffix = layer.isRasterMask ? ' (raster mask)' : '';
+      sections.push({
+        layerId,
+        title: title + rasterSuffix,
+        classes: classRows,
+      });
+    }
+    return sections;
+  }, [layers, annotationSetById, legendClassMeta]);
+  const hasLegendItems =
+    loadedAnnotationLegendSections.length > 0 ||
+    Object.entries(annotationsByLabel).length > 0 ||
+    datasets.length > 0 ||
+    trackedObjects.length > 0 ||
+    alerts.length > 0;
+
+  // ── Build a hierarchical layer list for the "all layers" view ──
+  // - Item layers (item-*) are nested inside their parent dataset card, not shown top-level
+  // - Child layers (with parentAoiId) are rendered after their parent AOI
+  const allLayerEntries = Object.entries(layers)
     .filter(([id]) => !id.startsWith('item-'))
     .sort(([, a], [, b]) => b.zIndex - a.zIndex); // top of stack first
+
+  // AOI auto-nest: the backend has no AOI↔annotation-set link, so we derive one
+  // here — an annotation-set layer whose extent falls entirely inside an AOI's
+  // bbox is shown nested under that AOI. Smallest containing AOI wins.
+  const aoiCandidates: AoiCandidate[] = Object.entries(layers)
+    .filter(([, l]) => l.type === 'aoi' && Array.isArray(l.aoiBbox))
+    .map(([id, l]) => ({ id, bbox: l.aoiBbox as Bbox }));
+
+  const derivedAoiParent = new Map<string, string>();
+  if (aoiCandidates.length > 0) {
+    for (const [id, layer] of Object.entries(layers)) {
+      if (layer.sourceType !== 'annotation_set' || layer.parentAoiId) continue;
+      const setId = id.startsWith('annset-') ? id.replace('annset-', '') : null;
+      const set = setId ? annotationSets.find((s) => s.annotation_set_id === setId) : null;
+      const extent = (set?.extent_4326 ?? layer.bounds ?? null) as Bbox | null;
+      const aoiId = findContainingAoiId(extent, aoiCandidates);
+      if (aoiId) derivedAoiParent.set(id, aoiId);
+    }
+  }
+
+  // Separate top-level layers from child layers.
+  // A layer is a "child" if:
+  //  • it has parentAoiId (AOI-bounded dataset), OR
+  //  • it is an annotation_set layer nested under a dataset or an AOI (derived).
+  const isAnnSetChild = (id: string, layer: typeof layers[string]) =>
+    layer.sourceType === 'annotation_set' &&
+    ((!!layer.parentDatasetId && !!layers[layer.parentDatasetId]) || derivedAoiParent.has(id));
+
+  const topLevelEntries = allLayerEntries.filter(
+    ([id, layer]) => !layer.parentAoiId && !isAnnSetChild(id, layer),
+  );
+  const childLayersByParent = new Map<string, typeof allLayerEntries>();
+  for (const entry of allLayerEntries) {
+    const [id, layer] = entry;
+    const parentId =
+      layer.parentAoiId ??
+      derivedAoiParent.get(id) ??
+      (isAnnSetChild(id, layer) ? layer.parentDatasetId : undefined);
+    if (parentId) {
+      const existing = childLayersByParent.get(parentId) ?? [];
+      existing.push(entry);
+      childLayersByParent.set(parentId, existing);
+    }
+  }
+
+  // Build flattened display list: parent followed by its children
+  const sortedLayerEntries: Array<[string, typeof layers[string], boolean]> = [];
+  for (const [id, layer] of topLevelEntries) {
+    sortedLayerEntries.push([id, layer, false]); // false = not a child layer
+    const children = childLayersByParent.get(id);
+    if (children) {
+      // AOI children are hidden behind the AOI's expand arrow; other parents
+      // (e.g. datasets) keep their existing always-visible nesting.
+      if (layer.type === 'aoi' && !expandedAois[id]) continue;
+      for (const [childId, childLayer] of children) {
+        sortedLayerEntries.push([childId, childLayer, true]); // true = child layer
+      }
+    }
+  }
 
   const sortedIds = sortedLayerEntries.map(([id]) => id);
 
@@ -168,6 +461,26 @@ export function LeftPanel({
           )}
         </span>
         <button
+          onClick={() => setPicker({ kind: 'standalone' })}
+          title="Add annotation layer"
+          aria-label="Add annotation layer"
+          style={{
+            width: 26,
+            height: 26,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            background: 'transparent',
+            border: 'none',
+            color: MC.navAccent,
+            cursor: 'pointer',
+            borderRadius: 4,
+            flexShrink: 0,
+          }}
+        >
+          <Plus size={14} />
+        </button>
+        <button
           onClick={onToggle}
           title={isCompact ? 'Dismiss' : 'Collapse panel'}
           aria-label={isCompact ? 'Dismiss layers panel' : 'Collapse layers panel'}
@@ -257,49 +570,162 @@ export function LeftPanel({
                   onDragEnd={handleDragEnd}
                 >
                   <SortableContext items={sortedIds} strategy={verticalListSortingStrategy}>
-                    {sortedLayerEntries.map(([id, layer]) => {
-                      const dataset = datasets.find((d) => d.id === id);
-                      const annSetId = id.startsWith('annset-') ? id.replace('annset-', '') : null;
-                      const annSet = annSetId ? annotationSets.find((s) => s.id === annSetId) : null;
+                    {sortedLayerEntries.map(([id, layer, isChild]) => {
+                      // For regular datasets: layerId === datasetId
+                      // For AOI child datasets: use sourceDatasetId from layer config
+                      const datasetId = layer.sourceType === 'dataset'
+                        ? (isChild ? (layer.sourceDatasetId ?? null) : id)
+                        : null;
+                      const dataset = datasetId ? datasets.find((d) => d.id === datasetId) : undefined;
+                      // Set id is derivable from the layer itself (persisted in
+                      // base_layers), so renaming works even when the map-mounts
+                      // metadata query hasn't loaded the full annSet object.
+                      const annSetId = id.startsWith('annset-')
+                        ? id.replace('annset-', '')
+                        : (layer.annotationSetId ?? null);
+                      const annSet = annSetId ? annotationSets.find((s) => s.annotation_set_id === annSetId) : null;
 
                       // Resolve display name
                       let displayName: string;
-                      if (dataset) {
+                      if (layer.type === 'aoi') {
+                        displayName = layer.name ?? 'AOI';
+                      } else if (isChild && layer.name) {
+                        // Child layers already have descriptive names like "Dataset Name (in AOI 1)"
+                        displayName = layer.name;
+                      } else if (dataset) {
                         displayName = dataset.name;
-                      } else if (annSet) {
-                        displayName = annSet.name;
+                      } else if (annSet?.set_name) {
+                        displayName = annSet.set_name;
                       } else if (id === 'tracking-all') {
                         displayName = `${trackedObjects.length} tracked object${trackedObjects.length !== 1 ? 's' : ''}`;
                       } else if (id === 'alerts-all') {
                         displayName = `${alerts.length} alert${alerts.length !== 1 ? 's' : ''}`;
                       } else {
-                        displayName = layer.tileServiceUrl ? 'Tile Service' : id;
+                        displayName = layer.tileServiceUrl
+                          ? `${layer.name ?? 'Tile Service'} (Basemap)`
+                          : (layer.name ?? id);
                       }
 
-                      // Remove handler
-                      const handleRemove = dataset && onRemoveDataset
-                        ? () => onRemoveDataset(dataset.id)
-                        : annSet && onRemoveAnnotationSet
-                          ? () => onRemoveAnnotationSet(annSet.id)
-                          : undefined;
+                      // Remove handler — always available for all layer types
+                      const isAnnotationSetLayer = layer.sourceType === 'annotation_set';
+                      let handleRemove: (() => void) | undefined;
 
-                      // Rename handler (annotation sets only)
-                      const handleRename = annSet && onRenameAnnotationSet
-                        ? (newName: string) => onRenameAnnotationSet(annSet.id, newName)
+                      if (isChild) {
+                        // Child layers always removable via removeLayer
+                        handleRemove = () => removeLayer(id);
+                      } else if (layer.type === 'aoi' && onRemoveAoi) {
+                        // AOI layers use the API callback if available
+                        handleRemove = () => onRemoveAoi(id);
+                      } else if (layer.type === 'aoi') {
+                        // Fall back to removeLayer if no API handler
+                        handleRemove = () => removeLayer(id);
+                      } else if (dataset && onRemoveDataset) {
+                        // Datasets use the API callback if available
+                        handleRemove = () => onRemoveDataset(dataset.id);
+                      } else if (isAnnotationSetLayer && annSetId && onRemoveAnnotationSet) {
+                        // Annotation sets use the API callback. Gate on annSetId
+                        // (derived from the layer), NOT the joined annSet object —
+                        // mounts key on `annotation_set_id` so annSet is undefined,
+                        // which previously fell through to a local-only removeLayer
+                        // and never hit the backend.
+                        handleRemove = () => onRemoveAnnotationSet(annSetId);
+                      } else if (isAnnotationSetLayer || layer.type === 'tracking' || layer.type === 'alert') {
+                        // Fall back to removeLayer for annotation sets, tracking, alerts
+                        handleRemove = () => removeLayer(id);
+                      } else if (layer.tileServiceUrl) {
+                        // Tile service / basemap layers — removable. Drop the backend
+                        // layer too (if persisted) so it doesn't reappear on reload,
+                        // then remove locally to fall back to the default basemap.
+                        handleRemove = () => {
+                          const backendId = useMapLayersStore.getState().backendLayerIds[id];
+                          if (mapId && backendId) {
+                            void datasetsApi.deleteMapLayer(mapId, backendId).catch(() => {});
+                          }
+                          removeLayer(id);
+                        };
+                      } else {
+                        // Other layer types are not removable
+                        handleRemove = undefined;
+                      }
+
+                      // Rename handler (annotation sets only). Gate on the id, not
+                      // the joined annSet object, so it stays available when the
+                      // mounts metadata query fails/loads late.
+                      const handleRename = annSetId && onRenameAnnotationSet
+                        ? (newName: string) => onRenameAnnotationSet(annSetId, newName)
                         : undefined;
 
                       return (
-                        <LayerCard
+                        <div
                           key={id}
-                          id={id}
-                          name={displayName}
-                          type={layer.type}
-                          dataset={dataset}
-                          annotationSet={annSet ?? undefined}
-                          mapId={mapId}
-                          onRemove={handleRemove}
-                          onRename={handleRename}
-                        />
+                          style={{
+                            marginLeft: isChild ? 20 : 0,
+                            position: 'relative',
+                          }}
+                        >
+                          {isChild && (
+                            <div
+                              style={{
+                                position: 'absolute',
+                                left: -12,
+                                top: 0,
+                                bottom: 0,
+                                width: 1,
+                                background: MC.borderLight,
+                              }}
+                            />
+                          )}
+                          {(() => {
+                            const aoiChildCount =
+                              layer.type === 'aoi' ? childLayersByParent.get(id)?.length ?? 0 : 0;
+                            const aoiToggle =
+                              layer.type === 'aoi' && aoiChildCount > 0
+                                ? () => setExpandedAois((p) => ({ ...p, [id]: !p[id] }))
+                                : undefined;
+                            return (
+                              <LayerCard
+                                id={id}
+                                name={displayName}
+                                type={layer.type}
+                                dataset={dataset}
+                                annotationSet={annSet ?? undefined}
+                                mapId={mapId}
+                                onRemove={handleRemove}
+                                onRename={handleRename}
+                                aoiExpanded={aoiToggle ? !!expandedAois[id] : undefined}
+                                onToggleAoiExpand={aoiToggle}
+                                childCount={aoiToggle ? aoiChildCount : undefined}
+                              />
+                            );
+                          })()}
+                          {/* Inline "Add annotation layer" affordance on dataset / stac_item layers */}
+                          {(layer.sourceType === 'dataset' || layer.sourceType === 'stac_item') && (
+                            <button
+                              onClick={() => {
+                                if (layer.sourceType === 'stac_item' && layer.stacItemId) {
+                                  setPicker({ kind: 'stacItem', stacItemId: layer.stacItemId, parentLayerId: id });
+                                } else if (datasetId) {
+                                  setPicker({ kind: 'dataset', datasetId, parentLayerId: id });
+                                }
+                              }}
+                                style={{
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  gap: 4,
+                                  marginLeft: 28,
+                                  padding: '2px 6px',
+                                  background: 'transparent',
+                                  border: 'none',
+                                  color: MC.accent,
+                                  fontSize: 10,
+                                  fontWeight: 600,
+                                  cursor: 'pointer',
+                                }}
+                              >
+                                <Plus size={11} /> Add annotation layer
+                              </button>
+                            )}
+                        </div>
                       );
                     })}
                   </SortableContext>
@@ -329,14 +755,14 @@ export function LeftPanel({
         {tab === 'legend' && (
           <div style={{ padding: '8px 12px' }}>
             {/* Annotation sets with class legends */}
-            {annotationSets.filter((s) => s.schema?.classes?.length).map((annSet) => (
-              <LegendSection key={annSet.id} title={annSet.name}>
-                {annSet.schema!.classes!.map((cls) => (
+            {loadedAnnotationLegendSections.map((section) => (
+              <LegendSection key={section.layerId} title={section.title} subtitle={section.description}>
+                {section.classes.map((cls) => (
                   <LegendRow
-                    key={cls.id}
-                    color={cls.style?.definition?.fillColor ?? MC.accent}
-                    label={cls.name}
-                    count={0}
+                    key={cls.key}
+                    color={cls.color}
+                    label={cls.label}
+                    description={cls.description}
                     shape="square"
                   />
                 ))}
@@ -371,7 +797,7 @@ export function LeftPanel({
               </LegendSection>
             )}
 
-            {totalItems === 0 && (
+            {!hasLegendItems && (
               <div style={{ padding: '20px 0', fontSize: 12, color: MC.textMuted, textAlign: 'center', fontStyle: 'italic' }}>
                 Add layers to build a legend.
               </div>
@@ -380,6 +806,32 @@ export function LeftPanel({
         )}
       </div>
     </>
+  );
+
+  // ── Picker modal (rendered in both compact & desktop modes) ───────────────
+  const pickerEl = (
+    <AnnotationSetPicker
+      open={!!picker}
+      onClose={() => setPicker(null)}
+      title={
+        picker?.kind === 'standalone'
+          ? 'Add annotation layer'
+          : picker?.kind === 'dataset'
+            ? 'Attach annotation layer to dataset'
+            : 'Attach annotation layer to item'
+      }
+      projectId={picker && picker.kind !== 'standalone' ? projectId : undefined}
+      filters={
+        picker?.kind === 'standalone'
+          ? { unattached: true }
+          : picker?.kind === 'dataset'
+            ? { datasetId: picker.datasetId }
+            : picker?.kind === 'stacItem'
+              ? { stacItemId: picker.stacItemId }
+              : undefined
+      }
+      onPick={handlePickSet}
+    />
   );
 
   // ── Compact: bottom sheet ───────────────────────────────────────────────────
@@ -471,6 +923,7 @@ export function LeftPanel({
             )}
           </button>
         )}
+        {pickerEl}
       </>
     );
   }
@@ -529,12 +982,13 @@ export function LeftPanel({
           <ChevronRight size={12} />
         </button>
       )}
+      {pickerEl}
     </>
   );
 }
 
 // ─── Sub-components ────────────────────────────────────────────────────────────
-function LegendSection({ title, children }: { title: string; children: React.ReactNode }) {
+function LegendSection({ title, subtitle, children }: { title: string; subtitle?: string; children: React.ReactNode }) {
   return (
     <div style={{ marginBottom: 16 }}>
       <div style={{
@@ -547,34 +1001,66 @@ function LegendSection({ title, children }: { title: string; children: React.Rea
       }}>
         {title}
       </div>
+      {subtitle && (
+        <div style={{
+          fontSize: 11,
+          color: MC.textMuted,
+          marginBottom: 6,
+          lineHeight: 1.35,
+        }}>
+          {subtitle}
+        </div>
+      )}
       <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>{children}</div>
     </div>
   );
 }
 
 function LegendRow({
-  color, label, count, shape,
+  color, label, description, count, shape,
 }: {
-  color: string; label: string; count: number; shape: 'circle' | 'square';
+  color: string; label: string; description?: string; count?: number; shape: 'circle' | 'square';
 }) {
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+    <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8 }}>
       <div style={{
         width: 12, height: 12,
         borderRadius: shape === 'circle' ? '50%' : 2,
         background: color,
         flexShrink: 0,
         opacity: 0.85,
+        marginTop: description ? 2 : 1,
       }} />
-      <span style={{
-        flex: 1, fontSize: 12, color: MC.textSecondary,
-        overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-      }} title={label}>
-        {label}
-      </span>
-      <span style={{ fontSize: 11, color: MC.textMuted, flexShrink: 0 }}>
-        {count.toLocaleString()}
-      </span>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <span style={{
+          display: 'block',
+          fontSize: 12,
+          color: MC.textSecondary,
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+          whiteSpace: 'nowrap',
+        }} title={label}>
+          {label}
+        </span>
+        {description && (
+          <span style={{
+            display: '-webkit-box',
+            WebkitLineClamp: 2,
+            WebkitBoxOrient: 'vertical',
+            overflow: 'hidden',
+            fontSize: 11,
+            color: MC.textMuted,
+            lineHeight: 1.3,
+          }} title={description}>
+            {description}
+          </span>
+        )}
+      </div>
+      {typeof count === 'number' && (
+        <span style={{ fontSize: 11, color: MC.textMuted, flexShrink: 0 }}>
+          {count.toLocaleString()}
+        </span>
+      )}
     </div>
   );
 }

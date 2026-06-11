@@ -29,7 +29,7 @@ import { annotationSetsApi } from '@/lib/api/annotation-sets';
 import { qk } from '@/lib/query-keys';
 import type { Dataset, Annotation, TrackedObject, Alert } from '@/types/api';
 import type { PaginatedResponse } from '@/types/common';
-import { useMapLayersStore } from '@/stores/mapLayersStore';
+import { useMapLayersStore, wasLayerLocallyRemoved } from '@/stores/mapLayersStore';
 
 export function useMapContext(projectId: string, orgId: string, mapId?: string) {
   const initLayer = useMapLayersStore((s) => s.initLayer);
@@ -115,30 +115,27 @@ export function useMapContext(projectId: string, orgId: string, mapId?: string) 
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [alerts.length, initLayer]);
 
-  // ── Annotation sets → layer store ──────────────────────────────────────────
-  const annotationSetIds = annotationSets.map((s) => s.id).join(',');
+  // ── Annotation set mounts → layer store ───────────────────────────────────
+  // annotationSetsApi.listByMap returns AnnotationSetMount rows: the canonical
+  // id field is `annotation_set_id` (NOT `id`) and the display name comes from
+  // the joined `set_name`. classStyles are hydrated asynchronously by
+  // sync.ts's hydrateClassStylesFromFeatures once features load — we don't
+  // pre-build them here because the mount response only carries `schema_id`,
+  // not the full schema tree. Using `.id`/`.name` would silently produce
+  // "annset-undefined" layers and a re-render loop when new sets arrive.
+  const annotationSetIds = annotationSets.map((s) => s.annotation_set_id).join(',');
   useEffect(() => {
     annotationSets.forEach((annSet) => {
-      const layerId = `annset-${annSet.id}`;
-      // Build per-class styles from schema classes
-      const classStyles: Record<string, { fillColor: string; strokeColor: string; strokeWidth: number; fillOpacity: number }> = {};
-      if (annSet.schema?.classes) {
-        for (const cls of annSet.schema.classes) {
-          if (cls.style?.definition) {
-            classStyles[cls.id] = {
-              fillColor: cls.style.definition.fillColor,
-              strokeColor: cls.style.definition.strokeColor,
-              strokeWidth: cls.style.definition.strokeWidth,
-              fillOpacity: cls.style.definition.fillOpacity,
-            };
-          }
-        }
-      }
+      if (!annSet.annotation_set_id) return;
+      const layerId = `annset-${annSet.annotation_set_id}`;
+      // Don't resurrect a layer the user removed this session. The persistent
+      // fix is unmounting the set (so listByMap stops returning it), but until
+      // that round-trips this guard prevents an immediate re-add.
+      if (wasLayerLocallyRemoved(layerId)) return;
       initLayer(layerId, 'annotation', {
-        name: annSet.name,
+        name: annSet.set_name ?? 'annotation set',
         sourceType: 'annotation_set',
-        annotationSetId: annSet.id,
-        classStyles: Object.keys(classStyles).length > 0 ? classStyles : undefined,
+        annotationSetId: annSet.annotation_set_id,
       });
     });
   // eslint-disable-next-line react-hooks/exhaustive-deps

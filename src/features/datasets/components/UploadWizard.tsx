@@ -20,6 +20,7 @@ import {
 } from '@/features/datasets/hooks/useMultipartUpload';
 import { useUploadStore } from '@/stores/uploadStore';
 import type { UploadPhase } from '@/stores/uploadStore';
+import { SegmentationClassMapper } from './SegmentationClassMapper';
 
 const ACCEPTED_TYPES = [
   'image/tiff',
@@ -232,6 +233,7 @@ interface UploadWizardProps {
 export function UploadWizard({ onAddToMap, onViewDataset }: UploadWizardProps) {
   const [file, setFile] = useState<File | null>(null);
   const [name, setName] = useState('');
+  const [datasetType, setDatasetType] = useState<'imagery' | 'segmentation_mask'>('imagery');
   const [tags, setTags] = useState<string[]>([]);
 
   const { start, abort, retryIngestion, dismiss } = useMultipartUpload();
@@ -272,13 +274,14 @@ export function UploadWizard({ onAddToMap, onViewDataset }: UploadWizardProps) {
 
   const handleStart = () => {
     if (!file || !name.trim()) return;
-    start({ file, name: name.trim(), tags });
+    start({ file, name: name.trim(), datasetType, tags });
   };
 
   const handleDismiss = () => {
     dismiss();
     setFile(null);
     setName('');
+    setDatasetType('imagery');
     setTags([]);
     setIngestStep(0);
   };
@@ -347,6 +350,34 @@ export function UploadWizard({ onAddToMap, onViewDataset }: UploadWizardProps) {
                   boxSizing: 'border-box',
                 }}
               />
+            </div>
+
+            <div>
+              <label style={{ fontSize: 11, fontWeight: 600, color: MC.sectionLabel, letterSpacing: '0.05em', textTransform: 'uppercase', display: 'block', marginBottom: 5 }}>
+                Dataset type
+              </label>
+              <div style={{ display: 'flex', gap: 6 }}>
+                {(['imagery', 'segmentation_mask'] as const).map((t) => (
+                  <button
+                    key={t}
+                    onClick={() => setDatasetType(t)}
+                    style={{
+                      flex: 1,
+                      height: 32,
+                      borderRadius: 5,
+                      border: `1.5px solid ${datasetType === t ? MC.accent : MC.inputBorder}`,
+                      background: datasetType === t ? MC.accentDim : MC.inputBg,
+                      color: datasetType === t ? MC.accent : MC.textMuted,
+                      fontSize: 12,
+                      fontWeight: datasetType === t ? 600 : 400,
+                      cursor: 'pointer',
+                      transition: 'all 0.15s',
+                    }}
+                  >
+                    {t === 'imagery' ? 'Imagery' : 'Segmentation mask'}
+                  </button>
+                ))}
+              </div>
             </div>
 
             <div>
@@ -515,6 +546,11 @@ export function UploadWizard({ onAddToMap, onViewDataset }: UploadWizardProps) {
             ? 'Multi-folder ZIP processed. Each folder was ingested as a separate dataset.'
             : 'Dataset ingested and ready for visualization.'}
         </div>
+
+        {/* Segmentation masks: map pixel values to annotation classes for colored overlay */}
+        {!isMulti && datasetType === 'segmentation_mask' && datasetId && (
+          <SegmentationClassMapper datasetId={datasetId} />
+        )}
 
         {/* Multi-dataset list — show each created dataset with a view link */}
         {isMulti && onViewDataset && (

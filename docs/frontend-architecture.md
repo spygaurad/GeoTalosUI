@@ -1,9 +1,9 @@
-# AwakeForest — Frontend Architecture (Updated)
+# GeoTalos — Frontend Architecture (Updated)
 
 > **Reference:** Backend schema (PostgreSQL + PostGIS + pgSTAC)  
 > **Stack:** Next.js 15 · TanStack Query v5 · Zustand v4 · Leaflet · shadcn/ui
 
-This document defines the frontend architecture for the AwakeForest Geospatial AI Platform. It aligns with the backend data model and supports all core workflows: map‑centric analysis, annotation management, AI inference, bulk operations, and real‑time job monitoring.
+This document defines the frontend architecture for the GeoTalos Geospatial AI Platform. It aligns with the backend data model and supports all core workflows: map‑centric analysis, annotation management, AI inference, bulk operations, and real‑time job monitoring.
 
 ---
 
@@ -149,7 +149,7 @@ src/
 │   ├── page.tsx                    # Public landing page → redirects auth users to /dashboard
 │   │
 │   ├── (auth)/                     # Public auth pages (no sidebar)
-│   │   ├── layout.tsx              # Centered layout with AwakeForest branding
+│   │   ├── layout.tsx              # Centered layout with GeoTalos branding
 │   │   ├── sign-in/[[...sign-in]]/page.tsx
 │   │   ├── sign-up/[[...sign-up]]/page.tsx
 │   │   └── select-org/page.tsx     # Clerk OrganizationList — after sign‑up
@@ -319,7 +319,7 @@ Key rule: A component in features/ should never be imported outside its own feat
 
 ```
 ┌─────────────────────────────────┐
-│  🌲 AwakeForest                 │  ← Logo (TopNav — fixed top bar)
+│  🌲 GeoTalos                 │  ← Logo (TopNav — fixed top bar)
 │  [Org Switcher ▼]  [Avatar]    │
 ├─────────────────────────────────┤
 │  ─── EXPLORE ───                │

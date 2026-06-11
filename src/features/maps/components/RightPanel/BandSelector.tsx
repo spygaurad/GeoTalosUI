@@ -31,7 +31,15 @@ export function BandSelector({
   onPresetChange,
 }: BandSelectorProps) {
   const bands = renderingConfig.bands;
-  const presets = renderingConfig.presets;
+  // Drop expression-based presets (e.g. legacy "ndvi"/"moisture" baked into
+  // already-ingested datasets). `handlePresetChange` can't apply `expression`/
+  // `asset_as_band`, so those buttons would render garbage. NDVI now lives in
+  // Temporal Playback, which builds its own expression.
+  const presets = Object.fromEntries(
+    Object.entries(renderingConfig.presets).filter(
+      ([, preset]) => !preset.params?.expression && !preset.params?.asset_as_band,
+    ),
+  );
 
   // Derive current selection — if no explicit selection, parse from default preset
   const current = bandSelection ?? deriveDefaultBands(renderingConfig);

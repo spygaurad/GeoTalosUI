@@ -117,6 +117,16 @@ export interface RenderingPreset {
   params: Record<string, string>;
 }
 
+/** Value→class association for a segmentation-mask dataset. Colors are derived
+ *  client-side from the schema classes' styles, not stored here. */
+export interface DatasetClassMap {
+  schema_id: string;
+  band_index: number;
+  nodata_value: number | null;
+  /** pixel value (string key) → annotation class UUID */
+  value_class_map: Record<string, string>;
+}
+
 export interface RenderingConfig {
   version: number;
   dtype: string;
@@ -127,6 +137,10 @@ export interface RenderingConfig {
   data_category: string;
   default_preset: string;
   presets: Record<string, RenderingPreset>;
+  /** Segmentation masks only: candidate class IDs (unique pixel values). */
+  class_values?: number[];
+  /** Segmentation masks only: stored value→class mapping (set via class-map endpoint). */
+  class_map?: DatasetClassMap;
 }
 
 export interface Dataset {
@@ -134,7 +148,7 @@ export interface Dataset {
   organization_id: string;
   name: string;
   description: string | null;
-  dataset_type: 'raster' | 'vector';
+  dataset_type: 'imagery' | 'segmentation_mask';
   status: DatasetStatus;
   stac_collection_id: string | null;
   /** Spatial footprint of the dataset — same field that was previously `spatial_extent`. */
@@ -200,12 +214,48 @@ export interface AnnotationClass {
   schema_id: string;
   parent_id: string | null;
   name: string;
+  /** Optional class description promoted by backend from properties.description. */
+  description?: string | null;
   path: string | null;           // ltree: "species.Bird.Sparrow"
   style: StyleDefinition | null; // embedded from Style table
   properties: Record<string, unknown> | null;
 }
 
+// --- Raster Segmentation Masks ---
+
+/** Unique pixel values in a raster band, used to build value→class mapping UI. */
+export interface RasterValuesResponse {
+  dataset_item_id: string;
+  band_index: number;
+  values: number[];
+  total_unique: number;
+  truncated: boolean;
+}
+
+/** Response from PATCH /annotation-sets/{id}/raster/config — contains the TiTiler tile URL. */
+export interface RasterConfigResponse {
+  annotation_set_id: string;
+  map_layer_id: string | null;
+  dataset_item_id: string;
+  stac_collection_id: string;
+  stac_item_id: string;
+  band_index: number;
+  /** RGBA tuples keyed by pixel value string (e.g. "1" → [34, 139, 34, 255]). */
+  colormap: Record<string, [number, number, number, number]>;
+  /** TiTiler URL template with {z}/{x}/{y} placeholders — append colormap params before use. */
+  tile_url_template: string;
+}
+
 // --- Annotation Sets ---
+
+/** How an annotation set was produced. Mirrors backend
+ *  `annotation_sets.source_type` CHECK constraint. */
+export type AnnotationSetSourceType = 'manual' | 'model' | 'import' | 'analysis';
+
+/** Review workflow stage. Mirrors backend `annotation_sets.review_status`.
+ *  raw → untouched, corrected → model output a human edited,
+ *  verified → explicitly signed off. */
+export type AnnotationReviewStatus = 'raw' | 'corrected' | 'verified';
 
 export interface AnnotationSet {
   id: string;
@@ -216,11 +266,45 @@ export interface AnnotationSet {
   name: string;
   description: string | null;
   created_by_user_id: string | null;
-  created_by_job_id: string | null;
+  /** Set by ModelManager when this set was produced by an inference job.
+   *  Matches the backend `AnnotationSetRead.job_id` field exactly — don't
+   *  rename without updating the inference-overlay filter in AoiInferencePanel. */
+  job_id: string | null;
+  source_type?: AnnotationSetSourceType;
+  review_status?: AnnotationReviewStatus;
+  /** [minx, miny, maxx, maxy] envelope over live annotations; null when empty.
+   *  Maintained by a DB trigger — used for AOI auto-nesting and fly-to. */
+  extent_4326?: [number, number, number, number] | null;
   annotation_count?: number;
   schema?: AnnotationSchema | null;
   created_at: string;
   updated_at: string;
+}
+
+/** Map-scoped annotation-set listing row. Matches backend
+ *  `AnnotationSetMountRead`: mount metadata + a flattened slice of the joined
+ *  AnnotationSet/DatasetItem so the map UI can filter and seed layers in one
+ *  round-trip. Note the mount's primary id is `annotation_set_id` (the
+ *  AnnotationSet's UUID) — there is no top-level `id`. */
+export interface AnnotationSetMount {
+  map_id: string;
+  annotation_set_id: string;
+  visible: boolean;
+  opacity: number;
+  z_index: number;
+  style_id: string | null;
+  style_override: Record<string, unknown> | null;
+  mounted_at: string;
+  set_name: string | null;
+  schema_id: string | null;
+  dataset_id: string | null;
+  dataset_item_id: string | null;
+  stac_item_id: string | null;
+  job_id: string | null;
+  source_type?: AnnotationSetSourceType;
+  review_status?: AnnotationReviewStatus;
+  /** [minx, miny, maxx, maxy] — enables AOI containment tests client-side. */
+  extent_4326?: [number, number, number, number] | null;
 }
 
 /** Who created an annotation — user (manual draw) or job (ML output). */
@@ -327,16 +411,31 @@ export interface TrackedObjectObservation {
 // --- ML Models ---
 export type ModelType = 'detection' | 'segmentation' | 'classification';
 
-export interface MLModel {
+/** Matches backend AIModelRead schema exactly. */
+export interface AIModel {
   id: string;
   organization_id: string;
   name: string;
-  type: ModelType;
-  version: string;
-  artifact_uri: string;
-  config: Record<string, unknown>;
+  description: string | null;
+  framework: string | null;       // "yolo", "sam3", "custom", etc.
+  version: string | null;
+  type: string | null;            // "detection" | "segmentation" | "classification"
+  endpoint_url: string | null;
+  request_config: Record<string, unknown> | null;
+  input_schema: Record<string, unknown> | null;
+  output_schema: Record<string, unknown> | null;
+  output_config: Record<string, unknown> | null;
+  config: Record<string, unknown> | null;
+  annotation_schema_id: string | null;
+  created_by: string | null;
+  has_auth_config: boolean;
   created_at: string;
+  updated_at: string;
+  deleted_at: string | null;
 }
+
+/** @deprecated Use AIModel — kept for backward compat. */
+export type MLModel = AIModel;
 
 // --- Alerts ---
 export type AlertType =
