@@ -21,6 +21,9 @@ import {
 import { useState } from 'react';
 import { toast } from 'sonner';
 import { datasetsApi } from '@/lib/api/datasets';
+import { datasetItemLabel } from '@/features/datasets/itemLabel';
+import { SegmentationClassMapper } from '@/features/datasets/components/SegmentationClassMapper';
+import { stacApi } from '@/lib/api/stac';
 import { mapsApi } from '@/lib/api/maps';
 import { projectsApi } from '@/lib/api/projects';
 import { qk } from '@/lib/query-keys';
@@ -168,7 +171,7 @@ function AddToMapModal({
     mutationFn: async (map: ProjectMap) => {
       await datasetsApi.addMapLayer(map.id, {
         name: dataset.name,
-        layer_type: dataset.dataset_type,
+        layer_type: 'raster', // Datasets are always raster (COG imagery)
         source_type: 'dataset',
         dataset_id: dataset.id,
         opacity: 1.0,
@@ -410,6 +413,7 @@ interface DatasetDetailContentProps {
 
 export function DatasetDetailContent({ workspaceId, datasetId }: DatasetDetailContentProps) {
   const [showAddToMap, setShowAddToMap] = useState(false);
+  const [showClassMapper, setShowClassMapper] = useState(false);
 
   const { data: dataset, isLoading } = useQuery({
     queryKey: qk.datasets.detail(datasetId),
@@ -425,6 +429,13 @@ export function DatasetDetailContent({ workspaceId, datasetId }: DatasetDetailCo
     queryKey: qk.datasets.items(datasetId),
     queryFn: () => datasetsApi.listItems(datasetId, { page_size: 25 }),
     enabled: dataset?.status === 'ready',
+  });
+
+  const { data: stacItems } = useQuery({
+    queryKey: ['dataset-detail', 'stac-items', dataset?.stac_collection_id ?? ''],
+    queryFn: () => stacApi.listCollectionItems(dataset!.stac_collection_id!, { limit: 200 }),
+    enabled: dataset?.status === 'ready' && !!dataset?.stac_collection_id,
+    staleTime: 60_000,
   });
 
   if (isLoading) {
@@ -447,13 +458,34 @@ export function DatasetDetailContent({ workspaceId, datasetId }: DatasetDetailCo
 
   const s = STATUS_CONFIG[dataset.status] ?? STATUS_CONFIG.pending;
 
-  const temporal = dataset.temporal_extent?.lower
-    ? `${new Date(dataset.temporal_extent.lower).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })}${
-        dataset.temporal_extent.upper && dataset.temporal_extent.upper !== dataset.temporal_extent.lower
-          ? ` – ${new Date(dataset.temporal_extent.upper).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })}`
+  const stacMetaById = new globalThis.Map<string, { datetime?: string; cloud?: number }>();
+  for (const f of stacItems?.features ?? []) {
+    const props = f.properties ?? {};
+    const rawCloud = (props['eo:cloud_cover'] as number | undefined) ?? (props['cloud_cover'] as number | undefined);
+    stacMetaById.set(f.id, {
+      datetime: props.datetime as string | undefined,
+      cloud: typeof rawCloud === 'number' ? rawCloud : undefined,
+    });
+  }
+
+  const stacDatetimes = Array.from(stacMetaById.values())
+    .map((m: { datetime?: string; cloud?: number }) => m.datetime)
+    .filter((d): d is string => !!d)
+    .sort();
+
+  const temporal = stacDatetimes.length > 0
+    ? `${new Date(stacDatetimes[0]).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })}${
+        stacDatetimes[stacDatetimes.length - 1] !== stacDatetimes[0]
+          ? ` – ${new Date(stacDatetimes[stacDatetimes.length - 1]).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })}`
           : ''
       }`
-    : null;
+    : dataset.temporal_extent?.lower
+      ? `${new Date(dataset.temporal_extent.lower).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })}${
+          dataset.temporal_extent.upper && dataset.temporal_extent.upper !== dataset.temporal_extent.lower
+            ? ` – ${new Date(dataset.temporal_extent.upper).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })}`
+            : ''
+        }`
+      : null;
 
   return (
     <div style={{
@@ -542,6 +574,34 @@ export function DatasetDetailContent({ workspaceId, datasetId }: DatasetDetailCo
               {dataset.dataset_type}
             </span>
           </div>
+
+          {/* Segmentation mask: define value→class mapping (works for old masks too) */}
+          {dataset.dataset_type === 'segmentation_mask' && dataset.status === 'ready' && (
+            <div style={{ marginBottom: 24 }}>
+              {!showClassMapper ? (
+                <button
+                  onClick={() => setShowClassMapper(true)}
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: 6,
+                    fontSize: '0.8125rem',
+                    fontWeight: 600,
+                    padding: '7px 12px',
+                    borderRadius: 6,
+                    border: `1px solid ${C.borderAccent}`,
+                    color: C.accent,
+                    background: C.accentLight,
+                    cursor: 'pointer',
+                  }}
+                >
+                  {dataset.metadata?.rendering_config?.class_map ? 'Edit class mapping' : 'Map mask classes'}
+                </button>
+              ) : (
+                <SegmentationClassMapper datasetId={datasetId} />
+              )}
+            </div>
+          )}
 
           {/* Metadata section */}
           <section style={{ marginBottom: 32 }}>
@@ -639,10 +699,19 @@ export function DatasetDetailContent({ workspaceId, datasetId }: DatasetDetailCo
                   </div>
                 ) : (
                   (items?.items ?? []).map((item) => {
-                    const dt = item.datetime
-                      ? new Date(item.datetime).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })
+                    const stacMeta = stacMetaById.get(item.stac_item_id);
+                    const dtValue = stacMeta?.datetime ?? item.datetime;
+                    const dt = dtValue
+                      ? new Date(dtValue).toLocaleString('en-GB', {
+                          day: 'numeric',
+                          month: 'short',
+                          year: 'numeric',
+                          hour: '2-digit',
+                          minute: '2-digit',
+                          second: '2-digit',
+                        })
                       : '—';
-                    const cloud = (item.properties_cache as Record<string, unknown>)?.['eo:cloud_cover'];
+                    const cloud = stacMeta?.cloud ?? (item.properties_cache as Record<string, unknown>)?.['eo:cloud_cover'];
                     return (
                       <div
                         key={item.id}
@@ -655,8 +724,8 @@ export function DatasetDetailContent({ workspaceId, datasetId }: DatasetDetailCo
                           borderBottom: `1px solid ${C.border}`,
                         }}
                       >
-                        <span style={{ fontSize: '0.75rem', fontFamily: 'monospace', color: C.text, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                          {item.stac_item_id}
+                        <span title={item.stac_item_id} style={{ fontSize: '0.8125rem', color: C.text, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          {datasetItemLabel(item)}
                         </span>
                         <span style={{ fontSize: '0.8125rem', color: C.textSec }}>{dt}</span>
                         <span style={{ fontSize: '0.8125rem', color: C.textSec }}>

@@ -1,6 +1,6 @@
 import { ProjectsContent } from './_components/ProjectsContent';
 
-export const metadata = { title: 'Projects — AwakeForest' };
+export const metadata = { title: 'Projects — GeoTalos' };
 
 export default async function ProjectsPage({
   params,

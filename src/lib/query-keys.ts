@@ -12,6 +12,29 @@ export const qk = {
   maps: {
     list: (projectId?: string) => ['maps', projectId] as const,
     detail: (id: string) => ['maps', 'detail', id] as const,
+    /** Datasets attached to a map. */
+    datasets: (mapId: string) => ['maps', mapId, 'datasets'] as const,
+    /** Resources intersecting an arbitrary AOI bbox (datasets, items, vectors, raster masks). */
+    aoiResources: (mapId: string, bbox: string) => ['maps', mapId, 'aoi-resources', bbox] as const,
+    /** Dataset items intersecting an arbitrary AOI bbox (for ad-hoc, unsaved AOIs). */
+    datasetItemsInAoi: (mapId: string, datasetId: string, bbox: string) =>
+      ['maps', mapId, 'datasets', datasetId, 'items-in-aoi', bbox] as const,
+  },
+
+  mapAois: {
+    /** List of saved AOIs on a map. */
+    list: (mapId: string) => ['maps', mapId, 'aois'] as const,
+    /** One saved AOI. */
+    detail: (mapId: string, aoiId: string) => ['maps', mapId, 'aois', aoiId] as const,
+    /** Saved selection (datasets/items/filters) for an AOI. */
+    selection: (mapId: string, aoiId: string) =>
+      ['maps', mapId, 'aois', aoiId, 'selection'] as const,
+    /** Saved render config (bands/rescale/colormap) for an AOI. */
+    rendering: (mapId: string, aoiId: string) =>
+      ['maps', mapId, 'aois', aoiId, 'rendering'] as const,
+    timeline: (mapId: string, aoiId: string) => ['maps', mapId, 'aois', aoiId, 'timeline'] as const,
+    timelineManifest: (mapId: string, aoiId: string) => ['maps', mapId, 'aois', aoiId, 'timeline-manifest'] as const,
+    tileJson: (mapId: string, aoiId: string) => ['maps', mapId, 'aois', aoiId, 'tilejson'] as const,
   },
 
   datasets: {
@@ -28,6 +51,7 @@ export const qk = {
   },
 
   annotationSets: {
+    listByProject: (projectId: string) => ['annotation-sets', 'project', projectId] as const,
     listByMap: (mapId: string) => ['annotation-sets', 'map', mapId] as const,
     detail: (id: string) => ['annotation-sets', id] as const,
     features: (id: string) => ['annotation-sets', id, 'features'] as const,
@@ -62,6 +86,10 @@ export const qk = {
     detail: (id: string) => ['models', id] as const,
   },
 
+  adapters: {
+    list: () => ['inference-adapters'] as const,
+  },
+
   jobs: {
     /** Backend only exposes individual job detail — no list endpoint. */
     detail: (id: string) => ['jobs', id] as const,
@@ -81,5 +109,15 @@ export const qk = {
   mapLayers: {
     refs: (projectId: string) => ['mapLayers', 'refs', projectId] as const,
     refData: (refId: string) => ['mapLayers', 'refData', refId] as const,
+  },
+  automation: {
+    nodeCatalog: () => ['automation', 'node-catalog'] as const,
+    pipelines: (params?: Record<string, unknown>) => ['automation', 'pipelines', params] as const,
+    pipelineDetail: (id: string) => ['automation', 'pipelines', id] as const,
+    pipelineRuns: (pipelineId: string) => ['automation', 'pipelines', pipelineId, 'runs'] as const,
+    runDetail: (runId: string) => ['automation', 'runs', runId] as const,
+    runSteps: (runId: string) => ['automation', 'runs', runId, 'steps'] as const,
+    runStepDetail: (runId: string, stepId: string) =>
+      ['automation', 'runs', runId, 'steps', stepId] as const,
   },
 } as const;

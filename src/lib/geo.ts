@@ -69,3 +69,24 @@ export function wktToGeoJSON(wkt: string): GeoJSONGeometry | null {
     return null;
   }
 }
+
+/**
+ * Compute [west, south, east, north] bbox from a GeoJSON geometry.
+ * Returns null if geometry is invalid or has no coordinates.
+ */
+export function geometryToTileBounds(
+  geometry: GeoJSONGeometry | null | undefined
+): [number, number, number, number] | null {
+  if (!geometry || !('coordinates' in geometry)) return null;
+  try {
+    const feature = turf.feature(asGeometry(geometry));
+    const [west, south, east, north] = turf.bbox(feature);
+    if (!Number.isFinite(west) || !Number.isFinite(south) ||
+        !Number.isFinite(east) || !Number.isFinite(north)) {
+      return null;
+    }
+    return [west, south, east, north];
+  } catch {
+    return null;
+  }
+}

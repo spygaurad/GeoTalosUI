@@ -20,6 +20,7 @@ import {
 } from '@/features/datasets/hooks/useMultipartUpload';
 import { useUploadStore } from '@/stores/uploadStore';
 import type { UploadPhase } from '@/stores/uploadStore';
+import { SegmentationClassMapper } from './SegmentationClassMapper';
 
 const ACCEPTED_TYPES = [
   'image/tiff',
@@ -232,6 +233,7 @@ interface UploadWizardProps {
 export function UploadWizard({ onAddToMap, onViewDataset }: UploadWizardProps) {
   const [file, setFile] = useState<File | null>(null);
   const [name, setName] = useState('');
+  const [datasetType, setDatasetType] = useState<'imagery' | 'segmentation_mask'>('imagery');
   const [tags, setTags] = useState<string[]>([]);
 
   const { start, abort, retryIngestion, dismiss } = useMultipartUpload();
@@ -272,13 +274,14 @@ export function UploadWizard({ onAddToMap, onViewDataset }: UploadWizardProps) {
 
   const handleStart = () => {
     if (!file || !name.trim()) return;
-    start({ file, name: name.trim(), tags });
+    start({ file, name: name.trim(), datasetType, tags });
   };
 
   const handleDismiss = () => {
     dismiss();
     setFile(null);
     setName('');
+    setDatasetType('imagery');
     setTags([]);
     setIngestStep(0);
   };
@@ -347,6 +350,34 @@ export function UploadWizard({ onAddToMap, onViewDataset }: UploadWizardProps) {
                   boxSizing: 'border-box',
                 }}
               />
+            </div>
+
+            <div>
+              <label style={{ fontSize: 11, fontWeight: 600, color: MC.sectionLabel, letterSpacing: '0.05em', textTransform: 'uppercase', display: 'block', marginBottom: 5 }}>
+                Dataset type
+              </label>
+              <div style={{ display: 'flex', gap: 6 }}>
+                {(['imagery', 'segmentation_mask'] as const).map((t) => (
+                  <button
+                    key={t}
+                    onClick={() => setDatasetType(t)}
+                    style={{
+                      flex: 1,
+                      height: 32,
+                      borderRadius: 5,
+                      border: `1.5px solid ${datasetType === t ? MC.accent : MC.inputBorder}`,
+                      background: datasetType === t ? MC.accentDim : MC.inputBg,
+                      color: datasetType === t ? MC.accent : MC.textMuted,
+                      fontSize: 12,
+                      fontWeight: datasetType === t ? 600 : 400,
+                      cursor: 'pointer',
+                      transition: 'all 0.15s',
+                    }}
+                  >
+                    {t === 'imagery' ? 'Imagery' : 'Segmentation mask'}
+                  </button>
+                ))}
+              </div>
             </div>
 
             <div>
@@ -499,20 +530,76 @@ export function UploadWizard({ onAddToMap, onViewDataset }: UploadWizardProps) {
   // ── Ready ──────────────────────────────────────────────────────────────────
   if (phase === 'ready') {
     const datasetId = upload?.datasetId;
+    const createdIds = upload?.createdDatasetIds;
+    const isMulti = createdIds && createdIds.length > 1;
+
     return (
       <div style={{ padding: '16px 14px', display: 'flex', flexDirection: 'column', gap: 14 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           <CheckCircle2 size={18} style={{ color: MC.success, flexShrink: 0 }} />
           <span style={{ fontSize: 14, fontWeight: 700, color: MC.text }}>
-            {upload?.datasetName}
+            {isMulti ? `${createdIds.length} datasets created` : upload?.datasetName}
           </span>
         </div>
         <div style={{ fontSize: 12, color: MC.textMuted }}>
-          Dataset ingested and ready for visualization.
+          {isMulti
+            ? 'Multi-folder ZIP processed. Each folder was ingested as a separate dataset.'
+            : 'Dataset ingested and ready for visualization.'}
         </div>
 
+        {/* Segmentation masks: map pixel values to annotation classes for colored overlay */}
+        {!isMulti && datasetType === 'segmentation_mask' && datasetId && (
+          <SegmentationClassMapper datasetId={datasetId} />
+        )}
+
+        {/* Multi-dataset list — show each created dataset with a view link */}
+        {isMulti && onViewDataset && (
+          <div style={{
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 0,
+            border: `1px solid ${MC.border}`,
+            borderRadius: 6,
+            overflow: 'hidden',
+          }}>
+            {createdIds.map((id) => (
+              <button
+                key={id}
+                onClick={() => onViewDataset(id)}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  gap: 8,
+                  padding: '8px 10px',
+                  borderBottom: `1px solid ${MC.border}`,
+                  background: 'transparent',
+                  border: 'none',
+                  borderBlockEnd: `1px solid ${MC.border}`,
+                  cursor: 'pointer',
+                  width: '100%',
+                  textAlign: 'left',
+                }}
+              >
+                <span style={{
+                  fontSize: 12,
+                  fontFamily: 'monospace',
+                  color: MC.textSecondary,
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
+                }}>
+                  {id.slice(0, 8)}…
+                </span>
+                <ArrowRight size={11} style={{ color: MC.textMuted, flexShrink: 0 }} />
+              </button>
+            ))}
+          </div>
+        )}
+
         <div style={{ display: 'flex', flexDirection: 'column', gap: 7, marginTop: 4 }}>
-          {onAddToMap && datasetId && (
+          {/* Single dataset: show "Add to map" and "View dataset" */}
+          {!isMulti && onAddToMap && datasetId && (
             <button
               onClick={() => onAddToMap(datasetId)}
               style={{
@@ -534,7 +621,7 @@ export function UploadWizard({ onAddToMap, onViewDataset }: UploadWizardProps) {
               Add to this map
             </button>
           )}
-          {onViewDataset && datasetId && (
+          {!isMulti && onViewDataset && datasetId && (
             <button
               onClick={() => onViewDataset(datasetId)}
               style={{

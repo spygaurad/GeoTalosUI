@@ -20,6 +20,7 @@ import {
   ChevronRight,
   Check,
   X,
+  BoxSelect,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import type { BasemapId, DrawTool } from '@/stores/mapStore';
@@ -365,6 +366,8 @@ export interface MapTopNavProps {
   onBasemapSelect: (id: BasemapId) => void;
   measurementActive: boolean;
   onMeasurementToggle: () => void;
+  aoiDrawMode?: boolean;
+  onAoiToolClick?: () => void;
 }
 
 export function MapTopNav({
@@ -385,6 +388,8 @@ export function MapTopNav({
   onBasemapSelect,
   measurementActive,
   onMeasurementToggle,
+  aoiDrawMode,
+  onAoiToolClick,
 }: MapTopNavProps) {
   const router = useRouter();
   const isCompact = useIsCompact();
@@ -554,6 +559,19 @@ export function MapTopNav({
           active={activeTool === 'measure' || measurementActive}
           onClick={onMeasurementToggle}
         />
+
+        {onAoiToolClick && (
+          <>
+            <ToolDivider />
+            <ToolBtn
+              icon={<BoxSelect size={15} />}
+              label="Area of Interest"
+              shortcut="A"
+              active={aoiDrawMode ?? false}
+              onClick={onAoiToolClick}
+            />
+          </>
+        )}
       </div>
 
       {/* Right — Library, Layers+Map, Share */}

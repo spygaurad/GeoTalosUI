@@ -3,6 +3,7 @@
 import { useEffect, useRef } from 'react';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
+import 'leaflet.markercluster/dist/MarkerCluster.css';
 import '@geoman-io/leaflet-geoman-free/dist/leaflet-geoman.css';
 import '@geoman-io/leaflet-geoman-free';
 import { useMapStore, setMapInstance } from '@/stores/mapStore';
@@ -10,6 +11,8 @@ import type { DrawTool } from '@/stores/mapStore';
 import { useMapLayersStore, wasFeatureJustClicked, markFeatureClick } from '@/stores/mapLayersStore';
 import { getMapManager } from '@/features/maps/MapManager';
 import { useMapSync } from '@/features/maps/hooks/useMapSync';
+import { annotationSetsApi } from '@/lib/api/annotation-sets';
+import { toast } from 'sonner';
 
 // Map Geoman shape names → our DrawTool enum
 const GEOMAN_TO_DRAW_TOOL: Record<string, DrawTool> = {
@@ -195,6 +198,9 @@ export default function LeafletMap() {
     setMapInstance(map);
     getMapManager().init(map);
 
+    // Set initial zoom so pointer visibility is correct before first zoomend
+    useMapLayersStore.getState().setCurrentZoom(zoom);
+
     // ── Tile layer ─────────────────────────────────────────
     const initialBasemapId = useMapStore.getState().activeBasemapId ?? 'osm';
     const initialBm = BASEMAPS[initialBasemapId] ?? BASEMAPS.osm;
@@ -315,33 +321,86 @@ export default function LeafletMap() {
     const handlePmCreate = (e: any) => {
       if (!mounted) return;
       const layer = e.layer as L.Layer & { toGeoJSON(): { geometry: GeoJSONGeometry } };
-      if (layer.toGeoJSON) {
-        useMapStore.getState().setDrawnGeometry(layer.toGeoJSON().geometry);
+      const geom = layer.toGeoJSON?.().geometry;
+      const drawTool = GEOMAN_TO_DRAW_TOOL[e.shape as string] ?? 'polygon';
+
+      const layersState = useMapLayersStore.getState();
+
+      // ── Annotation draw mode: save geometry to active set ────────────────
+      if (layersState.activeAnnotationSetId && geom) {
+        const setId = layersState.activeAnnotationSetId;
+        const classId = layersState.activeAnnotationClassId;
+        layer.remove();
+        if (!classId) {
+          toast.warning('Select a class in the right panel before drawing');
+          useMapStore.getState().setActiveDrawTool('polygon');
+          return;
+        }
+        annotationSetsApi.addFeature(setId, {
+          geometry: geom,
+          class_id: classId,
+        }).then(() => {
+          layersState.requestAnnotationSetRefresh(setId);
+          toast.success('Annotation saved');
+        }).catch((err: unknown) => {
+          toast.error('Failed to save annotation');
+          console.error('annotation save error', err);
+        });
+        // Re-enable polygon draw for the next shape
+        useMapStore.getState().setActiveDrawTool('polygon');
+        return;
+      }
+
+      // ── Bbox-prompt Mode: capture rectangle as a SAM3 bbox prompt ─────────
+      // Relay the [W,S,E,N] bounds to the inference panel and drop the temp
+      // Geoman layer (the panel renders its own styled prompt overlay). Keep the
+      // rectangle tool armed so the user can draw several exemplar boxes in a row.
+      if (layersState.bboxPromptDrawMode && geom) {
+        const bounds = (layer as unknown as L.Polygon).getBounds();
+        const bbox: [number, number, number, number] = [
+          bounds.getWest(), bounds.getSouth(), bounds.getEast(), bounds.getNorth(),
+        ];
+        layersState.setCapturedBboxPrompt(bbox);
+        layer.remove();
+        useMapStore.getState().setActiveDrawTool('rectangle');
+        return;
+      }
+
+      // ── AOI Mode: create AOI layer and remove temporary Geoman layer ──────
+      if (layersState.aoiDrawMode && geom) {
+        const bounds = (layer as unknown as L.Polygon).getBounds();
+        const bbox: [number, number, number, number] = [
+          bounds.getWest(), bounds.getSouth(), bounds.getEast(), bounds.getNorth(),
+        ];
+
+        layersState.createAoiLayer(geom, bbox);
+        layer.remove();
+        useMapStore.getState().setActiveDrawTool(null);
+        return;
+      }
+
+      // ── Standard annotation flow ──────────────────────────────────────────
+      if (geom) {
+        useMapStore.getState().setDrawnGeometry(geom);
       }
 
       // Store shape type + circle radius for geometry stats panel
-      const drawTool = GEOMAN_TO_DRAW_TOOL[e.shape as string] ?? 'polygon';
       const circleRadius = drawTool === 'circle'
         ? (layer as unknown as L.Circle).getRadius?.()
         : undefined;
       useMapStore.getState().setDrawnShapeInfo(drawTool, circleRadius);
 
-      // Track for live style updates (paths only — markers have no setStyle)
-      const path = layer as unknown as L.Path;
-      if (typeof path.setStyle === 'function') {
-        pendingLayerRef.current = layer;
-      } else {
-        // Point/Marker — no live style updates, but track as pending
-        pendingLayerRef.current = layer;
-      }
+      // Track for live style updates
+      pendingLayerRef.current = layer;
 
       // Always store per-layer geometry data (including markers)
-      const geom = layer.toGeoJSON().geometry;
-      drawnLayerData.current.set(layer, {
-        shapeType: drawTool,
-        geometry: geom,
-        circleRadius: circleRadius ?? undefined,
-      });
+      if (geom) {
+        drawnLayerData.current.set(layer, {
+          shapeType: drawTool,
+          geometry: geom,
+          circleRadius: circleRadius ?? undefined,
+        });
+      }
 
       // Add floating '×' delete overlay directly above the northernmost vertex.
       // Created hidden — only made visible when the layer is selected (clicked).
@@ -402,15 +461,38 @@ export default function LeafletMap() {
       useMapStore.getState().setDrawnGeometry(null);
     };
 
-    // ── Close right panel when clicking on empty map ────────
-    const handleMapClick = () => {
+    // ── Close right panel when clicking on empty map, or select tile layer ──
+    const handleMapClick = (e: L.LeafletMouseEvent) => {
       if (!mounted) return;
       if (justCreatedShapeRef.current) return;
       if (wasFeatureJustClicked()) return;
       // Don't touch the panel while measuring — measurement click listener
       // handles those clicks independently and the panel must stay open.
       if (useMapLayersStore.getState().measurementActive) return;
+      // Don't reselect/close while a draw tool is armed (AOI, annotation, or
+      // bbox-prompt). Mid-draw clicks place vertices; routing them to the layer
+      // underneath would switch the right panel and reset its state (e.g. the
+      // SAM3 inference panel's model + bbox-prompt selection).
+      if (useMapStore.getState().activeDrawTool) return;
       deselectAllDrawnLayers(); // hide delete button when deselecting
+
+      // Resolve the topmost layer under the click via the UI hierarchy (z-index).
+      // AOIs are tested by polygon containment, so an AOI overlaid on a dataset
+      // wins the click even though the dataset's tiles render underneath it.
+      const mm = getMapManager();
+      const hitLayerId = mm.findTopLayerAtPoint(e.latlng);
+      if (hitLayerId) {
+        markFeatureClick(); // prevent map click from also closing panel
+        const hitConfig = useMapLayersStore.getState().layers[hitLayerId];
+        if (hitConfig?.type === 'aoi') {
+          // AOI → open the AOI panel and zoom-in-only to it.
+          useMapLayersStore.getState().focusLayer(hitLayerId);
+        } else {
+          useMapLayersStore.getState().layerOnMapClick(hitLayerId);
+        }
+        return;
+      }
+
       if (useMapLayersStore.getState().rightPanelMode !== 'none') {
         useMapLayersStore.getState().closeRightPanel();
       }
@@ -473,6 +555,38 @@ export default function LeafletMap() {
       }).addTo(mapRef.current);
     });
 
+    // ── Reactive annotation class selection → update Geoman draw color ─────────
+    // When user picks a class in AnnotationDrawPanel, apply that class's fill/
+    // stroke colour to Geoman so the polygon preview matches the final colour.
+    const unsubClass = useMapLayersStore.subscribe(
+      (s) => ({ classId: s.activeAnnotationClassId, setId: s.activeAnnotationSetId }),
+      ({ classId, setId }) => {
+        if (!mounted || !mapRef.current?.pm) return;
+        if (classId && setId) {
+          const layerId = `annset-${setId}`;
+          const layer = useMapLayersStore.getState().layers[layerId];
+          const cs = layer?.classStyles?.[classId];
+          if (cs) {
+            mapRef.current.pm.setPathOptions({
+              color: cs.strokeColor,
+              fillColor: cs.fillColor,
+              fillOpacity: cs.fillOpacity,
+              weight: cs.strokeWidth ?? 2,
+            });
+            return;
+          }
+        }
+        // No class selected or no style — reset to default golden-brown
+        mapRef.current.pm.setPathOptions({
+          color: '#8c6d2c',
+          fillColor: '#8c6d2c',
+          fillOpacity: 0.15,
+          weight: 3,
+        });
+      },
+      { equalityFn: (a, b) => a.classId === b.classId && a.setId === b.setId },
+    );
+
     // ── Reactive draw tool — calls Geoman on tool change ────
     const unsubDrawTool = useMapStore.subscribe((state, prev) => {
       if (state.activeDrawTool === prev.activeDrawTool) return;
@@ -514,6 +628,7 @@ export default function LeafletMap() {
       ro.disconnect();
       unsubBasemap();
       unsubDrawTool();
+      unsubClass();
       unsubPending();
       // Clean up all drawn control markers
       drawnControls.current.forEach((control) => control.remove());

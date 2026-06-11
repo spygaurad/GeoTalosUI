@@ -1,13 +1,13 @@
 import { apiClient } from './client';
 import { EP } from './endpoints';
-import type { Dataset, DatasetItem } from '@/types/api';
+import type { Dataset, DatasetItem, RenderingConfig } from '@/types/api';
 import type { PaginatedResponse } from '@/types/common';
 
 // ── Request / Response types ───────────────────────────────────────────────────
 
 export interface DatasetCreatePayload {
   name: string;
-  dataset_type: 'raster' | 'vector';
+  dataset_type: 'imagery' | 'segmentation_mask';
 }
 
 export interface DatasetListParams {
@@ -61,31 +61,61 @@ export interface UploadCompleteResponse {
   job_id: string;
 }
 
-/** GET /datasets/{id}/tilejson — tile URLs point to the authenticated tile proxy */
+/** GET /datasets/{id}/tilejson — uses collection-tier (no search registration) */
 export interface TileJsonResponse {
   tiles: string[];
   bounds: [number, number, number, number]; // [west, south, east, north]
   minzoom: number;
   maxzoom: number;
+  dataset_id: string;
+  collection_id: string;
+  name?: string;
+  /** Rendering metadata injected by backend from cached rendering_config */
+  rendering?: {
+    data_category: string;
+    current_preset: string;
+    available_presets: Record<string, { label: string; params: Record<string, string> }>;
+  };
+}
+
+/** POST /tiles/mosaic/multi-dataset/tilejson or multi-item/tilejson */
+export interface MosaicTileJsonResponse {
+  tiles: string[];
+  bounds: [number, number, number, number];
+  minzoom: number;
+  maxzoom: number;
   searchid: string;
+  dataset_ids?: string[];
+  item_ids?: string[];
   name?: string;
 }
 
-/** GET /datasets/{id}/items/{item_id}/tile-config */
+/** GET /datasets/{id}/items/{item_id}/tile-config — uses item-tier proxy URL */
 export interface ItemTileConfigResponse {
   tile_url_template: string;
+  stac_item_id: string;
+  dataset_id: string;
+  rendering_config?: RenderingConfig | null;
 }
 
 /** POST /maps/{map_id}/layers */
 export interface MapLayerCreatePayload {
   name: string;
-  layer_type: 'raster' | 'vector' | 'xyz_tile';
-  source_type: 'dataset' | 'stac_item' | 'tile_service';
+  layer_type: 'raster' | 'vector' | 'annotation';
+  source_type: 'dataset' | 'stac_item' | 'tile_service' | 'annotation_set';
+  // Exactly ONE of these must be set based on source_type:
+  // - dataset: requires dataset_id
+  // - stac_item: requires stac_item_id (NO dataset_id)
+  // - tile_service: requires tile_service_url
+  // - annotation_set: requires annotation_set_id
   dataset_id?: string;
   stac_item_id?: string;
   tile_service_url?: string;
+  annotation_set_id?: string;
+  source_config?: Record<string, unknown>;
   opacity?: number;
   visible?: boolean;
+  z_index?: number;
 }
 
 export interface MapLayerRead {
@@ -96,8 +126,12 @@ export interface MapLayerRead {
   source_type: string;
   dataset_id: string | null;
   stac_item_id: string | null;
+  annotation_set_id: string | null;
+  tile_service_url: string | null;
+  source_config: Record<string, unknown> | null;
   opacity: number;
   visible: boolean;
+  z_index: number;
   created_at: string;
 }
 
@@ -136,22 +170,71 @@ export const datasetsApi = {
   /** Fetch TileJSON for COG rendering. Requires dataset.status = ready.
    *  Defaults to assets=['data'] (single-band orthomosaic). Multi-asset (e.g.
    *  RGB composites) must use repeated query params — URLSearchParams handles this. */
-  getTileJson: (id: string, assets: string[] = ['data']) => {
+  getTileJson: (id: string, opts?: {
+    assets?: string[];
+    preset?: string;
+    asset_bidx?: string;
+    rescale?: string;
+  }) => {
     const sp = new URLSearchParams();
-    assets.forEach((a) => sp.append('assets', a));
+    (opts?.assets ?? ['data']).forEach((a) => sp.append('assets', a));
+    if (opts?.preset) sp.set('preset', opts.preset);
+    if (opts?.asset_bidx) sp.set('asset_bidx', opts.asset_bidx);
+    if (opts?.rescale) sp.set('rescale', opts.rescale);
     return apiClient
       .get(EP.datasets.tileJson(id), { searchParams: sp })
       .json<TileJsonResponse>();
   },
 
-  /** Get tile URL template for a single STAC item (single .tif file). */
+  /** Get tile URL template for a single STAC item (by DB UUID). */
   getItemTileConfig: (datasetId: string, itemId: string) =>
     apiClient
       .get(EP.datasets.itemTileConfig(datasetId, itemId))
       .json<ItemTileConfigResponse>(),
 
+  /** Get tile URL template for a single STAC item (by STAC item ID string). */
+  getItemTileConfigByStacId: (datasetId: string, stacItemId: string) =>
+    apiClient
+      .get(EP.datasets.itemTileConfigByStacId(datasetId, stacItemId))
+      .json<ItemTileConfigResponse>(),
+
   getDownloadUrl: (id: string) =>
     apiClient.get(EP.datasets.downloadUrl(id)).json<{ download_url: string }>(),
+
+  /** GET /datasets/{id}/raster-values — unique pixel values read live from the
+   *  mask raster (mirrors the annotation-set raster-mask preview). */
+  getRasterValues: (id: string, bandIndex = 1) =>
+    apiClient
+      .get(EP.datasets.rasterValues(id), {
+        searchParams: { band_index: String(bandIndex) },
+      })
+      .json<{
+        dataset_id: string;
+        dataset_item_id: string;
+        band_index: number;
+        values: number[];
+        total_unique: number;
+        truncated: boolean;
+      }>(),
+
+  /** PATCH /datasets/{id}/class-map — associate segmentation-mask pixel values
+   *  with annotation classes (colors are derived client-side from the classes). */
+  saveClassMap: (
+    id: string,
+    data: {
+      schema_id: string;
+      value_class_map: Record<string, string>;
+      band_index?: number;
+      nodata_value?: number | null;
+    },
+  ) =>
+    apiClient.patch(EP.datasets.classMap(id), { json: data }).json<{
+      dataset_id: string;
+      schema_id: string;
+      band_index: number;
+      nodata_value: number | null;
+      value_class_map: Record<string, string>;
+    }>(),
 
   // ── Multipart upload flow ──────────────────────────────────────────────────
   //
@@ -211,4 +294,28 @@ export const datasetsApi = {
   /** DELETE /maps/{mapId}/layers/{layerId} — remove layer from map. */
   deleteMapLayer: (mapId: string, layerId: string) =>
     apiClient.delete(EP.maps.layerDetail(mapId, layerId)).json<void>(),
+
+  // ── Multi-dataset / multi-item mosaic tiling ──────────────────────────────
+
+  /** POST /tiles/mosaic/multi-dataset/tilejson — composite mosaic across datasets */
+  getMultiDatasetTileJson: (datasetIds: string[], assets: string[] = ['data']) =>
+    apiClient
+      .post(EP.tiles.multiDatasetTileJson, {
+        json: {
+          dataset_ids: datasetIds,
+          assets: assets.join(','),
+        },
+      })
+      .json<MosaicTileJsonResponse>(),
+
+  /** POST /tiles/mosaic/multi-item/tilejson — mosaic of specific STAC items by stac_item_id */
+  getMultiItemTileJson: (stacItemIds: string[], assets: string[] = ['data']) =>
+    apiClient
+      .post(EP.tiles.multiItemTileJson, {
+        json: {
+          item_ids: stacItemIds,
+          assets: assets.join(','),
+        },
+      })
+      .json<MosaicTileJsonResponse>(),
 };

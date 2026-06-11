@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import dynamic from 'next/dynamic';
 import Link from 'next/link';
 import { useQuery } from '@tanstack/react-query';
@@ -18,7 +18,10 @@ import {
 } from 'lucide-react';
 import { datasetsApi } from '@/lib/api/datasets';
 import { qk } from '@/lib/query-keys';
+import { TablePagination } from '@/components/TablePagination';
 import type { Dataset, DatasetStatus } from '@/types/api';
+
+const PAGE_SIZE = 20;
 
 // ── Color palette (warm cream — matches workspace pages) ──────────────────────
 const C = {
@@ -270,11 +273,12 @@ export function DatasetsContent({ workspaceId }: DatasetsContentProps) {
   const [query, setQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<FilterStatus>('all');
   const [showUpload, setShowUpload] = useState(false);
+  const [page, setPage] = useState(1);
   const { orgId } = useAuth();
 
   const { data, isLoading } = useQuery({
     queryKey: qk.datasets.list({ organization_id: orgId }),
-    queryFn: () => datasetsApi.list({ page_size: 200 }),
+    queryFn: () => datasetsApi.list({ page_size: 1000 }),
     enabled: !!orgId,
     refetchInterval: (query) => {
       const items = query.state.data?.items ?? [];
@@ -295,6 +299,15 @@ export function DatasetsContent({ workspaceId }: DatasetsContentProps) {
   });
 
   const hasFilter = !!query || statusFilter !== 'all';
+
+  // Reset to first page whenever the filter result set changes.
+  useEffect(() => {
+    setPage(1);
+  }, [query, statusFilter]);
+
+  const pageCount = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
+  const safePage = Math.min(page, pageCount);
+  const paged = filtered.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE);
 
   const clearFilters = useCallback(() => {
     setQuery('');
@@ -428,10 +441,16 @@ export function DatasetsContent({ workspaceId }: DatasetsContentProps) {
           <EmptyState onUpload={() => setShowUpload(true)} hasFilter={hasFilter} />
         ) : (
           <>
-            {filtered.map((dataset) => (
+            {paged.map((dataset) => (
               <DatasetRow key={dataset.id} dataset={dataset} workspaceId={workspaceId} />
             ))}
             <UploadRow onClick={() => setShowUpload(true)} />
+            <TablePagination
+              page={safePage}
+              total={filtered.length}
+              pageSize={PAGE_SIZE}
+              onPageChange={setPage}
+            />
           </>
         )}
       </div>

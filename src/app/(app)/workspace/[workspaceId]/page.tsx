@@ -2,7 +2,7 @@ import { currentUser } from '@clerk/nextjs/server';
 import { DashboardContent } from './_components/DashboardContent';
 
 export const metadata = {
-  title: 'Dashboard — AwakeForest',
+  title: 'Dashboard — GeoTalos',
 };
 
 export default async function WorkspacePage({

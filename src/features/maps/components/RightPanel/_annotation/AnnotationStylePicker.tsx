@@ -1,5 +1,7 @@
 'use client';
 
+import { useState, useRef, useEffect } from 'react';
+import { HexColorPicker } from 'react-colorful';
 import type { DrawTool } from '@/stores/mapStore';
 import type { LayerStyle } from '@/features/maps/types';
 import { MC } from '../../../mapColors';
@@ -18,8 +20,8 @@ export interface AnnotationStylePickerProps {
 }
 
 /**
- * Color pickers, opacity/weight sliders, dash pattern selector, and an inline
- * SVG preview. Stateless — all values come from props, all changes go through onChange.
+ * Color pickers (react-colorful HSL), opacity/weight sliders, dash pattern
+ * selector, and an inline SVG preview.
  */
 export function AnnotationStylePicker({ style, shapeType, onChange }: AnnotationStylePickerProps) {
   const isPolyline = shapeType === 'polyline';
@@ -27,42 +29,21 @@ export function AnnotationStylePicker({ style, shapeType, onChange }: Annotation
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
 
-      {/* ── Color row ─────────────────────────────────────────── */}
-      <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-        <div style={{ flex: 1 }}>
-          <div style={{ fontSize: 11, color: MC.sectionLabel, marginBottom: 4 }}>Stroke color</div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <input
-              type="color"
-              value={style.color}
-              aria-label="Stroke color"
-              onChange={(e) => onChange({ color: e.target.value })}
-              style={{ width: 32, height: 28, cursor: 'pointer', borderRadius: 4, border: 'none', padding: 1 }}
-            />
-            <span style={{ fontSize: 11, color: MC.textSecondary, fontFamily: 'monospace' }}>
-              {style.color.toUpperCase()}
-            </span>
-          </div>
-        </div>
+      {/* ── Stroke color ──────────────────────────────────────── */}
+      <ColorField
+        label="Stroke color"
+        value={style.color}
+        onChange={(c) => onChange({ color: c })}
+      />
 
-        {!isPolyline && (
-          <div style={{ flex: 1 }}>
-            <div style={{ fontSize: 11, color: MC.sectionLabel, marginBottom: 4 }}>Fill color</div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <input
-                type="color"
-                value={style.fillColor}
-                aria-label="Fill color"
-                onChange={(e) => onChange({ fillColor: e.target.value })}
-                style={{ width: 32, height: 28, cursor: 'pointer', borderRadius: 4, border: 'none', padding: 1 }}
-              />
-              <span style={{ fontSize: 11, color: MC.textSecondary, fontFamily: 'monospace' }}>
-                {style.fillColor.toUpperCase()}
-              </span>
-            </div>
-          </div>
-        )}
-      </div>
+      {/* ── Fill color — polygon shapes only ───────────────────── */}
+      {!isPolyline && (
+        <ColorField
+          label="Fill color"
+          value={style.fillColor}
+          onChange={(c) => onChange({ fillColor: c })}
+        />
+      )}
 
       {/* ── Fill opacity — polygon shapes only ────────────────── */}
       {!isPolyline && (
@@ -143,7 +124,96 @@ export function AnnotationStylePicker({ style, shapeType, onChange }: Annotation
   );
 }
 
-// ── Local helpers ─────────────────────────────────────────────────────────────
+// ── ColorField with HSL picker popover ──────────────────────────────────────
+
+function ColorField({ label, value, onChange }: { label: string; value: string; onChange: (hex: string) => void }) {
+  const [open, setOpen] = useState(false);
+  const [hexInput, setHexInput] = useState(value);
+  const ref = useRef<HTMLDivElement>(null);
+
+  // Sync external value → local input
+  useEffect(() => { setHexInput(value); }, [value]);
+
+  // Close on outside click
+  useEffect(() => {
+    if (!open) return;
+    const handler = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [open]);
+
+  const handleHexSubmit = () => {
+    const hex = hexInput.startsWith('#') ? hexInput : `#${hexInput}`;
+    if (/^#[0-9a-fA-F]{6}$/.test(hex)) {
+      onChange(hex);
+    } else {
+      setHexInput(value); // revert
+    }
+  };
+
+  return (
+    <div ref={ref} style={{ position: 'relative' }}>
+      <div style={{ fontSize: 11, color: MC.sectionLabel, marginBottom: 4 }}>{label}</div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        {/* Color swatch — click to open picker */}
+        <button
+          onClick={() => setOpen((v) => !v)}
+          aria-label={`Pick ${label.toLowerCase()}`}
+          style={{
+            width: 32, height: 28, borderRadius: 4,
+            border: `1px solid ${MC.inputBorder}`,
+            background: value,
+            cursor: 'pointer',
+            flexShrink: 0,
+          }}
+        />
+        {/* Hex input */}
+        <input
+          type="text"
+          value={hexInput}
+          onChange={(e) => setHexInput(e.target.value)}
+          onBlur={handleHexSubmit}
+          onKeyDown={(e) => { if (e.key === 'Enter') handleHexSubmit(); }}
+          aria-label={`${label} hex value`}
+          style={{
+            width: 72, fontSize: 11, fontFamily: 'monospace',
+            color: MC.textSecondary,
+            background: MC.inputBg,
+            border: `1px solid ${MC.inputBorder}`,
+            borderRadius: 4, padding: '4px 6px',
+            outline: 'none',
+          }}
+        />
+      </div>
+
+      {/* HSL picker popover */}
+      {open && (
+        <div style={{
+          position: 'absolute',
+          top: '100%',
+          left: 0,
+          marginTop: 4,
+          zIndex: 120,
+          background: MC.panelBg,
+          border: `1px solid ${MC.panelBorder}`,
+          borderRadius: 8,
+          boxShadow: MC.shadowMd,
+          padding: 8,
+        }}>
+          <HexColorPicker
+            color={value}
+            onChange={(hex) => { onChange(hex); setHexInput(hex); }}
+            style={{ width: 180, height: 160 }}
+          />
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Slider ─────────────────────────────────────────────────────────────────
 
 function SliderRow({
   label, value, min, max, step = 1, unit, onChange,

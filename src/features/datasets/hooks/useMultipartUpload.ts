@@ -27,6 +27,7 @@ interface SpeedSample {
 export interface StartUploadOptions {
   file: File;
   name: string;
+  datasetType: 'imagery' | 'segmentation_mask';
   tags?: string[];
 }
 
@@ -129,15 +130,30 @@ export function useMultipartUpload() {
             id: string;
             status: JobStatus;
             error: string | null;
+            input_params: Record<string, unknown>;
           }>();
 
           patchUpload({ jobStatus: job.status });
 
           if (job.status === 'completed') {
+            // Multi-folder ZIP uploads store all created dataset IDs in input_params
+            const createdIds = Array.isArray(job.input_params?.created_dataset_ids)
+              ? (job.input_params.created_dataset_ids as string[])
+              : null;
+            patchUpload({ createdDatasetIds: createdIds });
             setPhase('ready');
             queryClient.invalidateQueries({ queryKey: qk.datasets.list() });
             queryClient.invalidateQueries({ queryKey: qk.datasets.detail(datasetId) });
-            toast.success('Dataset ready');
+            if (createdIds && createdIds.length > 1) {
+              for (const id of createdIds) {
+                queryClient.invalidateQueries({ queryKey: qk.datasets.detail(id) });
+              }
+            }
+            toast.success(
+              createdIds && createdIds.length > 1
+                ? `${createdIds.length} datasets ready`
+                : 'Dataset ready',
+            );
             return;
           }
 
@@ -161,7 +177,7 @@ export function useMultipartUpload() {
   );
 
   const start = useCallback(
-    async ({ file, name, tags = [] }: StartUploadOptions) => {
+    async ({ file, name, datasetType, tags = [] }: StartUploadOptions) => {
       abortControllerRef.current = new AbortController();
       speedSamplesRef.current = [];
       partBytesRef.current = new Map();
@@ -176,14 +192,11 @@ export function useMultipartUpload() {
         progress: { ...INITIAL_PROGRESS, bytesTotal: file.size },
         jobStatus: null,
         error: null,
+        createdDatasetIds: null,
       });
 
       try {
         // ── Step 1: Create dataset metadata ─────────────────────────────────
-        const ext = file.name.split('.').pop()?.toLowerCase() ?? '';
-        // zip may contain COG rasters or shapefiles; caller passes datasetType to disambiguate.
-        // Default: tif/tiff/geotiff/zip → raster, geojson/json → vector.
-        const datasetType = (ext === 'geojson' || ext === 'json') ? 'vector' : 'raster';
         const dataset = await datasetsApi.create({
           name,
           dataset_type: datasetType,
@@ -195,6 +208,7 @@ export function useMultipartUpload() {
         phaseRef.current = 'initiating';
 
         // ── Step 2: Initiate multipart upload ────────────────────────────────
+        const ext = file.name.split('.').pop()?.toLowerCase() ?? '';
         const contentTypeMap: Record<string, string> = {
           tif: 'image/tiff', tiff: 'image/tiff', geotiff: 'image/tiff',
           geojson: 'application/geo+json', json: 'application/geo+json',

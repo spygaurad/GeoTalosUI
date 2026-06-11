@@ -1,17 +1,18 @@
 'use client';
 
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { toast } from 'sonner';
-import { ExternalLink, Map, Layers, FileImage, ChevronRight, Download } from 'lucide-react';
+import { useCallback, useEffect } from 'react';
+import { useQuery } from '@tanstack/react-query';
+import { ExternalLink, FileImage, ChevronRight, Download, Layers } from 'lucide-react';
 import { datasetsApi } from '@/lib/api/datasets';
 import { qk } from '@/lib/query-keys';
 import { useMapLayersStore } from '@/stores/mapLayersStore';
-import { getMapInstance } from '@/stores/mapStore';
 import { MC } from '../../mapColors';
+import { BandSelector } from './BandSelector';
+import type { DatasetMetadata } from '@/types/api';
+import type { BandSelection } from '../../types';
 
 interface DatasetInfoPanelProps {
   datasetId: string;
-  mapId?: string;
 }
 
 function MetaRow({ label, value }: { label: string; value: React.ReactNode }) {
@@ -30,72 +31,105 @@ const STATUS_COLORS: Record<string, string> = {
   failed:    MC.danger,
 };
 
-export function DatasetInfoPanel({ datasetId, mapId }: DatasetInfoPanelProps) {
-  const queryClient = useQueryClient();
-  const initLayer = useMapLayersStore((s) => s.initLayer);
-  const setBackendLayerId = useMapLayersStore((s) => s.setBackendLayerId);
-  const setLayerTileConfig = useMapLayersStore((s) => s.setLayerTileConfig);
-  const layers = useMapLayersStore((s) => s.layers);
+export function DatasetInfoPanel({ datasetId }: DatasetInfoPanelProps) {
   const openItemsPanel = useMapLayersStore((s) => s.openItemsPanel);
-  const isOnMap = !!layers[datasetId];
+  // Find the layer for this dataset. For regular dataset layers the key is the
+  // dataset UUID. For AOI child layers the key is "aoi-{ts}-ds-{datasetId}"
+  // and sourceDatasetId holds the real dataset UUID.
+  const layer = useMapLayersStore((s) =>
+    s.layers[datasetId] ??
+    Object.values(s.layers).find((l) => l.sourceDatasetId === datasetId) ??
+    null
+  );
+  const setLayerBandSelection = useMapLayersStore((s) => s.setLayerBandSelection);
+  const setLayerTileConfig = useMapLayersStore((s) => s.setLayerTileConfig);
+  const setLayerRenderingConfig = useMapLayersStore((s) => s.setLayerRenderingConfig);
 
   const { data: dataset, isLoading } = useQuery({
     queryKey: qk.datasets.detail(datasetId),
     queryFn: () => datasetsApi.get(datasetId),
   });
 
-  const addToMapMutation = useMutation({
-    mutationFn: async () => {
-      if (!dataset) return;
+  // ── Band change helpers ───────────────────────────────────────────────────
+  // Helpers that iterate over ALL raster layers that belong to this dataset:
+  //   • the direct dataset layer (key === datasetId)
+  //   • every AOI child layer (sourceDatasetId === datasetId)
+  //   • every item layer (parentDatasetId === datasetId)
+  // This ensures dataset band/preset changes propagate to items under it.
 
-      // Initialize the layer immediately (optimistic)
-      initLayer(datasetId, 'dataset', { sourceType: 'dataset' });
+  /** Returns all store layer IDs that map to this dataset. */
+  const getMatchingLayerIds = useCallback((): string[] => {
+    const allLayers = useMapLayersStore.getState().layers;
+    return Object.entries(allLayers)
+      .filter(([id, l]) =>
+        (id === datasetId || l.sourceDatasetId === datasetId || l.parentDatasetId === datasetId)
+        && (l.sourceType === 'dataset' || l.sourceType === 'stac_item')
+      )
+      .map(([id]) => id);
+  }, [datasetId]);
 
-      // For raster datasets with a STAC collection, fetch TileJSON to get tile URL
-      if (dataset.status === 'ready' && dataset.stac_collection_id) {
-        try {
-          const tileJson = await datasetsApi.getTileJson(datasetId);
-          if (tileJson.tiles[0]) {
-            setLayerTileConfig(datasetId, {
-              tileUrl: tileJson.tiles[0],
-              tileBounds: tileJson.bounds,
-              tileMinZoom: tileJson.minzoom,
-              tileMaxZoom: tileJson.maxzoom,
-            });
-
-            // Fly to dataset spatial extent
-            const map = getMapInstance();
-            if (map && tileJson.bounds) {
-              const [west, south, east, north] = tileJson.bounds;
-              map.fitBounds([[south, west], [north, east]], { padding: [40, 40], maxZoom: 16 });
-            }
-          }
-        } catch {
-          // TileJSON not available — footprint polygon will be used instead
-        }
+  const applyBandToCurrentUrl = useCallback((bands: BandSelection, rc: NonNullable<DatasetMetadata['rendering_config']>) => {
+    const allLayers = useMapLayersStore.getState().layers;
+    for (const lid of getMatchingLayerIds()) {
+      const l = allLayers[lid];
+      if (!l?.tileUrl) continue;
+      const [basePath, existingQs] = l.tileUrl.split('?');
+      const params = new URLSearchParams(existingQs ?? '');
+      params.set('asset_bidx', `data|${bands.r},${bands.g},${bands.b}`);
+      params.delete('colormap_name');
+      params.delete('colormap');
+      const rBand = rc.bands.find((b) => b.index === bands.r);
+      const gBand = rc.bands.find((b) => b.index === bands.g);
+      const bBand = rc.bands.find((b) => b.index === bands.b);
+      if (rBand && gBand && bBand) {
+        const p2 = Math.min(rBand.stats.p2, gBand.stats.p2, bBand.stats.p2);
+        const p98 = Math.max(rBand.stats.p98, gBand.stats.p98, bBand.stats.p98);
+        params.set('rescale', `${Math.round(p2)},${Math.round(p98)}`);
+      } else {
+        params.delete('rescale');
       }
+      setLayerTileConfig(lid, { tileUrl: `${basePath}?${params.toString()}` });
+    }
+  }, [getMatchingLayerIds, setLayerTileConfig]);
 
-      // Persist layer to the backend map record
-      if (mapId) {
-        try {
-          const bl = await datasetsApi.addMapLayer(mapId, {
-            name: dataset.name,
-            layer_type: dataset.dataset_type,
-            source_type: 'dataset',
-            dataset_id: datasetId,
-            opacity: 1.0,
-            visible: true,
-          });
-          setBackendLayerId(datasetId, bl.id);
-          queryClient.invalidateQueries({ queryKey: ['map-layers', mapId] });
-        } catch {
-          // non-critical — layer is already in client store
-        }
-      }
-    },
-    onSuccess: () => toast.success(`"${dataset?.name}" added to map`),
-    onError: () => toast.error('Failed to add to map'),
-  });
+  // Sync renderingConfig to store once the API data arrives — only on existing layers.
+  useEffect(() => {
+    if (!dataset?.metadata?.rendering_config) return;
+    const rc = dataset.metadata.rendering_config;
+    const allLayers = useMapLayersStore.getState().layers;
+    for (const lid of Object.entries(allLayers)
+      .filter(([id, l]) =>
+        (id === datasetId || l.sourceDatasetId === datasetId || l.parentDatasetId === datasetId)
+        && (l.sourceType === 'dataset' || l.sourceType === 'stac_item')
+        && !l.renderingConfig
+      )
+      .map(([id]) => id)) {
+      setLayerRenderingConfig(lid, rc);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [datasetId, dataset?.metadata?.rendering_config, setLayerRenderingConfig]);
+
+  const applyPresetToCurrentUrl = useCallback((presetId: string, rc: NonNullable<DatasetMetadata['rendering_config']>) => {
+    const preset = rc.presets[presetId];
+    if (!preset) return;
+    const allLayers = useMapLayersStore.getState().layers;
+    for (const lid of getMatchingLayerIds()) {
+      const l = allLayers[lid];
+      if (!l?.tileUrl) continue;
+      const [basePath, existingQs] = l.tileUrl.split('?');
+      const params = new URLSearchParams(existingQs ?? '');
+      params.delete('asset_bidx');
+      params.delete('rescale');
+      params.delete('colormap_name');
+      params.delete('colormap');
+      if (preset.params.asset_bidx) params.set('asset_bidx', preset.params.asset_bidx);
+      if (preset.params.rescale) params.set('rescale', preset.params.rescale);
+      if (preset.params.colormap_name) params.set('colormap_name', preset.params.colormap_name);
+      if (preset.params.colormap) params.set('colormap', preset.params.colormap);
+      const qs = params.toString();
+      setLayerTileConfig(lid, { tileUrl: qs ? `${basePath}?${qs}` : basePath });
+    }
+  }, [getMatchingLayerIds, setLayerTileConfig]);
 
   if (isLoading) {
     return (
@@ -192,6 +226,46 @@ export function DatasetInfoPanel({ datasetId, mapId }: DatasetInfoPanelProps) {
         </button>
       )}
 
+      {/* Band Selection — shown when dataset has multi-band rendering config */}
+      {(() => {
+        const rc = dataset.metadata?.rendering_config ?? layer?.renderingConfig;
+        if (!rc || rc.bands.length < 2) return null;
+        return (
+          <div style={{ padding: '10px 14px', borderBottom: `1px solid ${MC.border}` }}>
+            <div style={{
+              display: 'flex', alignItems: 'center', gap: 6,
+              fontSize: 10, fontWeight: 700, letterSpacing: '0.08em',
+              textTransform: 'uppercase', color: MC.sectionLabel, marginBottom: 8,
+            }}>
+              <Layers size={11} style={{ color: MC.accent }} />
+              Band Selection
+            </div>
+            <BandSelector
+              renderingConfig={rc}
+              bandSelection={layer?.bandSelection ?? null}
+              activePreset={layer?.activePreset ?? null}
+              onBandChange={(bands, preset) => {
+                getMatchingLayerIds().forEach((lid) =>
+                  setLayerBandSelection(lid, bands, preset ?? null)
+                );
+                applyBandToCurrentUrl(bands, rc);
+              }}
+              onPresetChange={(presetId) => {
+                const preset = rc.presets[presetId];
+                const match = preset?.params.asset_bidx?.match(/\|(\d+),(\d+),(\d+)/);
+                const bands: BandSelection | null = match
+                  ? { r: Number(match[1]), g: Number(match[2]), b: Number(match[3]) }
+                  : null;
+                getMatchingLayerIds().forEach((lid) =>
+                  setLayerBandSelection(lid, bands, presetId)
+                );
+                applyPresetToCurrentUrl(presetId, rc);
+              }}
+            />
+          </div>
+        );
+      })()}
+
       {/* Metadata */}
       <div style={{ padding: '8px 14px' }}>
         <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase', color: MC.sectionLabel, marginBottom: 6 }}>
@@ -207,6 +281,9 @@ export function DatasetInfoPanel({ datasetId, mapId }: DatasetInfoPanelProps) {
           } />
         )}
         <MetaRow label="Type" value={dataset.dataset_type} />
+        {inferSource(dataset.metadata) && (
+          <MetaRow label="Source" value={inferSource(dataset.metadata)!} />
+        )}
         {dataset.metadata?.gsd_min != null && (
           <MetaRow
             label="GSD"
@@ -232,46 +309,6 @@ export function DatasetInfoPanel({ datasetId, mapId }: DatasetInfoPanelProps) {
 
       {/* Actions */}
       <div style={{ padding: '10px 14px', borderTop: `1px solid ${MC.border}`, display: 'flex', flexDirection: 'column', gap: 7 }}>
-        {!isOnMap && dataset.status === 'ready' && (
-          <button
-            onClick={() => addToMapMutation.mutate()}
-            disabled={addToMapMutation.isPending}
-            style={{
-              height: 32,
-              borderRadius: 5,
-              border: 'none',
-              background: MC.accent,
-              color: '#1c2119',
-              fontSize: 12,
-              fontWeight: 700,
-              cursor: 'pointer',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              gap: 6,
-              opacity: addToMapMutation.isPending ? 0.6 : 1,
-            }}
-          >
-            <Map size={12} />
-            {addToMapMutation.isPending ? 'Adding…' : 'Add full mosaic to map'}
-          </button>
-        )}
-
-        {isOnMap && (
-          <div style={{
-            height: 30,
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            gap: 6,
-            fontSize: 12,
-            color: MC.success,
-          }}>
-            <Layers size={12} />
-            On this map
-          </div>
-        )}
-
         {dataset.status === 'ready' && (
           <button
             onClick={async () => {
@@ -279,7 +316,7 @@ export function DatasetInfoPanel({ datasetId, mapId }: DatasetInfoPanelProps) {
                 const { download_url } = await datasetsApi.getDownloadUrl(datasetId);
                 window.open(download_url, '_blank');
               } catch {
-                toast.error('Download URL not available');
+                // download not available
               }
             }}
             style={{
@@ -327,6 +364,23 @@ export function DatasetInfoPanel({ datasetId, mapId }: DatasetInfoPanelProps) {
       </div>
     </div>
   );
+}
+
+/** Infer source type label from metadata (explicit or GSD-based). */
+function inferSource(metadata: DatasetMetadata | null | undefined): string | null {
+  if (!metadata) return null;
+  const explicit = (metadata as Record<string, unknown>).source_type as string | undefined;
+  if (explicit) {
+    const labels: Record<string, string> = { drone: 'Drone', lidar: 'LiDAR', satellite: 'Satellite', aerial: 'Aerial' };
+    return labels[explicit] ?? explicit;
+  }
+  const gsd = metadata.gsd_min;
+  if (gsd != null) {
+    if (gsd < 0.1) return 'Drone';
+    if (gsd < 5) return 'Satellite (HR)';
+    return 'Satellite';
+  }
+  return null;
 }
 
 function formatBytes(bytes: number): string {

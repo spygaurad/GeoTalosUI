@@ -53,7 +53,7 @@ export default async function LandingPage() {
             <span
               style={{ fontFamily: 'var(--font-display)', color: '#f5ede0', fontSize: '1.125rem', letterSpacing: '-0.01em', fontWeight: 600 }}
             >
-              AwakeForest
+              GeoTalos
             </span>
           </div>
           <div className="flex items-center gap-5">
@@ -129,7 +129,7 @@ export default async function LandingPage() {
                     marginBottom: '2.5rem',
                   }}
                 >
-                  AwakeForest unifies satellite imagery, AI inference, and annotation
+                  GeoTalos unifies satellite imagery, AI inference, and annotation
                   workflows into one platform — built for the guardians of the world's
                   forests.
                 </p>
@@ -289,7 +289,7 @@ export default async function LandingPage() {
               Ready to protect your forests?
             </h2>
             <p style={{ fontSize: '1rem', lineHeight: 1.65, color: '#b8c9a0', marginBottom: '2.5rem' }}>
-              Join conservation teams using AwakeForest to detect deforestation,
+              Join conservation teams using GeoTalos to detect deforestation,
               run AI inference, and respond to environmental threats — faster.
             </p>
             <Link
@@ -312,10 +312,10 @@ export default async function LandingPage() {
         <div className="max-w-7xl mx-auto px-6 lg:px-8 flex items-center justify-between">
           <div className="flex items-center gap-2">
             <TreePine className="w-4 h-4" style={{ color: '#c4985c' }} aria-hidden="true" />
-            <span style={{ fontSize: '0.8125rem', fontWeight: 500, color: '#8a9a7a' }}>AwakeForest</span>
+            <span style={{ fontSize: '0.8125rem', fontWeight: 500, color: '#8a9a7a' }}>GeoTalos</span>
           </div>
           <p style={{ fontSize: '0.75rem', color: '#5a6a5a' }}>
-            &copy; {new Date().getFullYear()} AwakeForest. All rights reserved.
+            &copy; {new Date().getFullYear()} GeoTalos. All rights reserved.
           </p>
         </div>
       </footer>

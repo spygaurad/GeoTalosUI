@@ -189,7 +189,7 @@ export function DashboardContent({ workspaceId, firstName }: DashboardContentPro
         >
           <div className="flex-1">
             <p style={{ fontSize: '0.875rem', fontWeight: 600, color: '#2e3428', marginBottom: '6px' }}>
-              Welcome to AwakeForest
+              Welcome to GeoTalos
             </p>
             <div className="flex items-center gap-6">
               {[

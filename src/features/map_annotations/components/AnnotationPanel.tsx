@@ -7,7 +7,7 @@ import { useAnnotationStore } from '@/stores/annotationStore';
 import {
   AnnotationStyleManager,
   AnnotationDrawingTools,
-} from '@/features/annotations/components';
+} from '@/features/map_annotations/components';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Separator } from '@/components/ui/separator';
@@ -83,6 +83,7 @@ export function AnnotationPanel({ annotationSet }: AnnotationPanelProps) {
         <AnnotationDrawingTools
           annotationSetId={annotationSet.id}
           schemaClasses={classes as any}
+          allowedGeometryTypes={(schema as AnnotationSchema).geometry_types}
         />
       )}
 

@@ -103,6 +103,60 @@ export function useCreateAnnotation() {
 }
 
 /**
+ * Hook to create an annotation on a map with auto-resolved annotation set.
+ * Backend finds or creates an annotation set matching (map + schema + user).
+ * Invalidates both the map's annotation sets list and the resolved set's features.
+ */
+export function useCreateAnnotationOnMap() {
+  const queryClient = useQueryClient();
+  const { setIsSavingAnnotation, setError, clearPendingAnnotation } = useAnnotationStore();
+
+  return useMutation({
+    mutationFn: ({ mapId, classId, geometry, properties, schemaId, datasetId, setName }: {
+      mapId: string;
+      classId: string;
+      geometry: GeoJSONGeometry;
+      properties?: Record<string, unknown>;
+      schemaId?: string | null;
+      datasetId?: string | null;
+      setName?: string | null;
+    }) =>
+      annotationSetsApi.addFeatureOnMap(mapId, {
+        class_id: classId,
+        geometry,
+        properties: properties ?? null,
+        schema_id: schemaId,
+        dataset_id: datasetId,
+        set_name: setName,
+      }),
+    onMutate: () => {
+      setIsSavingAnnotation(true);
+    },
+    onSuccess: (result, variables) => {
+      // Invalidate the resolved set's features + detail
+      queryClient.invalidateQueries({
+        queryKey: qk.annotationSets.features(result.annotation_set_id),
+      });
+      queryClient.invalidateQueries({
+        queryKey: qk.annotationSets.detail(result.annotation_set_id),
+      });
+      // Also refresh the map's annotation set list (a new set may have been created)
+      queryClient.invalidateQueries({
+        queryKey: qk.annotationSets.listByMap(variables.mapId),
+      });
+      setIsSavingAnnotation(false);
+      setError(null);
+      clearPendingAnnotation();
+    },
+    onError: (error: unknown) => {
+      const message = error instanceof Error ? error.message : 'Failed to save annotation';
+      setError(message);
+      setIsSavingAnnotation(false);
+    },
+  });
+}
+
+/**
  * Hook to update an existing annotation.
  * Returns a mutation that invalidates the features query on success.
  */
@@ -160,7 +214,7 @@ export function useUpdateAnnotationClassStyle() {
       name?: string;
     }) =>
       annotationSchemasApi.updateClassStyle(schemaId, classId, {
-        style: style as any,
+        definition: (style ?? {}) as Record<string, unknown>,
         name,
       }),
     onSuccess: (updatedClass, variables) => {

@@ -15,10 +15,10 @@ const inter = Inter({
 });
 
 export const metadata: Metadata = {
-  title: 'AwakeForest',
+  title: 'GeoTalos',
   description: 'Intelligent geospatial forest management platform',
   icons: {
-    icon: [{ url: '/AwakeForest_logo.png', type: 'image/png' }],
+    icon: [{ url: '/GeoTalos_logo.png', type: 'image/png' }],
   },
 };
 

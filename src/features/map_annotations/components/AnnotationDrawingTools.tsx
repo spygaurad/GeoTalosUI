@@ -3,7 +3,7 @@
 import React, { useState } from 'react';
 import type { AnnotationClass } from '@/types/api';
 import { useAnnotationStore } from '@/stores/annotationStore';
-import { useCreateAnnotation } from '@/features/maps/hooks/useAnnotations';
+import { useCreateAnnotation, useCreateAnnotationOnMap } from '@/features/maps/hooks/useAnnotations';
 import { Button } from '@/components/ui/button';
 import {
   Select,
@@ -16,28 +16,36 @@ import { toast } from 'sonner';
 import { AlertCircle, CheckCircle2 } from 'lucide-react';
 
 interface AnnotationDrawingToolsProps {
-  annotationSetId: string;
+  /** Explicit set — if provided, annotations go directly to this set. */
+  annotationSetId?: string;
+  /** Map ID — used for auto-resolving annotation set when annotationSetId is absent. */
+  mapId?: string;
+  /** Schema ID — passed to backend for auto-set resolution. */
+  schemaId?: string | null;
   schemaClasses: AnnotationClass[];
+  allowedGeometryTypes?: string[];
   onDrawingStart?: () => void;
   onDrawingEnd?: () => void;
 }
 
 /**
  * AnnotationDrawingTools
- * Provides UI controls for drawing annotations and saving them to the backend.
- * - Display available drawing tools (point, line, polygon)
- * - Allow user to select the annotation class
- * - Show pending geometry and save/cancel buttons
- * - POST drawn features to the backend
+ *
+ * Supports two modes:
+ * 1. Explicit set: `annotationSetId` provided → POST /annotation-sets/{id}/annotations
+ * 2. Auto-set: only `mapId` provided → POST /maps/{mapId}/annotations (backend creates set if needed)
  */
 export function AnnotationDrawingTools({
   annotationSetId,
+  mapId,
+  schemaId,
   schemaClasses,
   onDrawingStart,
   onDrawingEnd,
 }: AnnotationDrawingToolsProps) {
   const [selectedClassId, setSelectedClassId] = useState<string>('');
   const createAnnotationMutation = useCreateAnnotation();
+  const createOnMapMutation = useCreateAnnotationOnMap();
 
   const {
     pendingAnnotation,
@@ -45,6 +53,8 @@ export function AnnotationDrawingTools({
     setIsDrawing,
     clearPendingAnnotation,
   } = useAnnotationStore();
+
+  const isSaving = createAnnotationMutation.isPending || createOnMapMutation.isPending;
 
   const handleStartDrawing = () => {
     if (!selectedClassId) {
@@ -62,15 +72,30 @@ export function AnnotationDrawingTools({
     }
 
     try {
-      await createAnnotationMutation.mutateAsync({
-        setId: annotationSetId,
-        classId: selectedClassId,
-        geometry: pendingAnnotation.geometry as any,
-        properties: pendingAnnotation.properties ?? undefined,
-      });
+      if (annotationSetId) {
+        // Explicit set mode
+        await createAnnotationMutation.mutateAsync({
+          setId: annotationSetId,
+          classId: selectedClassId,
+          geometry: pendingAnnotation.geometry as any,
+          properties: pendingAnnotation.properties ?? undefined,
+        });
+      } else if (mapId) {
+        // Auto-set mode — backend finds or creates the set
+        await createOnMapMutation.mutateAsync({
+          mapId,
+          classId: selectedClassId,
+          geometry: pendingAnnotation.geometry as any,
+          properties: pendingAnnotation.properties ?? undefined,
+          schemaId: schemaId ?? null,
+        });
+      } else {
+        toast.error('No annotation set or map specified');
+        return;
+      }
       toast.success('Annotation saved');
       onDrawingEnd?.();
-    } catch (error) {
+    } catch {
       toast.error('Failed to save annotation');
     }
   };
@@ -147,18 +172,16 @@ export function AnnotationDrawingTools({
                 className="flex-1"
                 variant="default"
                 onClick={handleSaveDrawing}
-                disabled={
-                  !pendingAnnotation.geometry || createAnnotationMutation.isPending
-                }
+                disabled={!pendingAnnotation.geometry || isSaving}
               >
-                {createAnnotationMutation.isPending ? 'Saving...' : 'Save'}
+                {isSaving ? 'Saving...' : 'Save'}
               </Button>
               <Button
                 size="sm"
                 className="flex-1"
                 variant="outline"
                 onClick={handleCancelDrawing}
-                disabled={createAnnotationMutation.isPending}
+                disabled={isSaving}
               >
                 Cancel
               </Button>

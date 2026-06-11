@@ -1,7 +1,7 @@
 import type { Metadata } from 'next';
 import { MapLoader } from '@/features/maps/components/MapLoader';
 
-export const metadata: Metadata = { title: 'Map Editor — AwakeForest' };
+export const metadata: Metadata = { title: 'Map Editor — GeoTalos' };
 
 interface Props {
   params: Promise<{ workspaceId: string; projectId: string; mapId: string }>;

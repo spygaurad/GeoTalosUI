@@ -1,4 +1,4 @@
-export type LayerType = 'dataset' | 'annotation' | 'tracking' | 'alert';
+export type LayerType = 'dataset' | 'annotation' | 'tracking' | 'alert' | 'aoi';
 
 /** Source types matching the backend API (ui-leaflet-integration-guide §11) */
 export type LayerSourceType = 'dataset' | 'stac_item' | 'tile_service' | 'annotation_set';
@@ -39,9 +39,22 @@ export const DEFAULT_ALERT_STYLE: LayerStyle = {
 export const DEFAULT_DATASET_STYLE: LayerStyle = {
   color: '#5c8ce0',
   fillColor: '#5c8ce0',
-  fillOpacity: 0.1,
+  // No interior fill by default — the boundary outline marks the dataset extent
+  // while the real imagery colors inside stay true (no blue tint overlay).
+  fillOpacity: 0,
   weight: 1.5,
   radius: 6,
+};
+
+export const DEFAULT_AOI_STYLE: LayerStyle = {
+  color: '#e6a23c',
+  fillColor: '#e6a23c',
+  // No interior fill by default — only the dashed boundary is drawn so the
+  // imagery/annotations inside the AOI keep their real colors.
+  fillOpacity: 0,
+  weight: 2,
+  radius: 6,
+  dashArray: '6 4',
 };
 
 export const DEFAULT_TILE_SERVICE_STYLE: LayerStyle = {
@@ -50,6 +63,33 @@ export const DEFAULT_TILE_SERVICE_STYLE: LayerStyle = {
   fillOpacity: 0.1,
   weight: 1,
   radius: 6,
+};
+
+/** Band selection for RGB rendering — indices are 1-based band numbers */
+export interface BandSelection {
+  r: number;
+  g: number;
+  b: number;
+}
+
+/**
+ * Visualization filter for annotation_set layers. Drives both the on-map
+ * rendering (via MapManager.resolveAnnotationStyle) and the AOI visualization
+ * panel UI. Features below the confidence/area thresholds are hidden on the
+ * map; `colorMode` switches between per-class colors and a confidence heatmap.
+ */
+export interface AnnotationFilter {
+  colorMode: 'class' | 'confidence';
+  /** Hide features whose confidence is below this (0–1). 0 = show all. */
+  minConfidence: number;
+  /** Hide polygon features smaller than this area in m². 0 = show all. */
+  minAreaM2: number;
+}
+
+export const DEFAULT_ANNOTATION_FILTER: AnnotationFilter = {
+  colorMode: 'class',
+  minConfidence: 0,
+  minAreaM2: 0,
 };
 
 export interface LayerConfig {
@@ -78,6 +118,8 @@ export interface LayerConfig {
   annotationSetId?: string;
   /** Per-class styles for annotation_set layers. Keyed by class_id. */
   classStyles?: Record<string, { fillColor: string; strokeColor: string; strokeWidth: number; fillOpacity: number }>;
+  /** True when this annotation_set layer is a raster segmentation mask (TiTiler rendering). */
+  isRasterMask?: boolean;
   /** Spatial bounds [west, south, east, north] — enables zoom-to-layer */
   bounds?: [number, number, number, number] | null;
   /** Scale-dependent visibility — layer hidden outside this zoom range */
@@ -91,6 +133,26 @@ export interface LayerConfig {
   loading?: boolean;
   /** Error state — true when the layer has encountered persistent errors */
   error?: boolean;
+  /** Rendering config from titiler — band metadata, presets, etc. */
+  renderingConfig?: import('@/types/api').RenderingConfig | null;
+  /** Current band selection for RGB rendering (1-based indices) */
+  bandSelection?: BandSelection | null;
+  /** Current active rendering preset name */
+  activePreset?: string | null;
+  /** For annotation_set layers — confidence/area/color-mode visualization filter. */
+  annotationFilter?: AnnotationFilter;
+  /** For AOI layers — the GeoJSON geometry of the AOI */
+  aoiGeometry?: import('@/types/geo').GeoJSONGeometry;
+  /** For AOI layers — the bounding box [west, south, east, north] */
+  aoiBbox?: [number, number, number, number];
+  /** For AOI-bounded child layers — the parent AOI layer ID */
+  parentAoiId?: string;
+  /** For AOI-bounded child layers — clip bounds for tile requests [west, south, east, north] */
+  clipBounds?: [number, number, number, number];
+  /** For AOI-bounded dataset layers — the original dataset ID this is clipped from */
+  sourceDatasetId?: string;
+  /** For AOI-bounded dataset layers — the STAC collection ID for queries */
+  stacCollectionId?: string;
 }
 
 export interface SelectedFeature {
@@ -102,13 +164,28 @@ export interface SelectedFeature {
   latlng: [number, number];
   /** Reference to the actual Leaflet layer for live-style updates via registry applyUpdate */
   layerRef?: unknown;
+  /** ID of the parent layer in mapLayersStore (for left panel selection) */
+  layerId?: string;
 }
 
 // 'new-annotation' = user just drew a shape via Geoman, right panel shows attribute form
 // 'measurement'    = measurement tool is active, right panel shows live segment data
 // 'dataset'        = dataset layer row clicked, shows metadata + tile controls
 // 'items'          = browsing individual STAC items within a dataset
-export type RightPanelMode = 'none' | 'feature' | 'style' | 'new-annotation' | 'measurement' | 'dataset' | 'items' | 'annotation-set';
+export type RightPanelMode = 'none' | 'feature' | 'style' | 'new-annotation' | 'measurement' | 'dataset' | 'items' | 'annotation-set' | 'annotation-draw' | 'aoi';
+
+/** A single frame in AOI temporal playback — may contain items from multiple datasets */
+export interface AoiTimelineFrame {
+  datetime: string;
+  /** Raster items for this frame (tiles to render) */
+  items: Array<{
+    datasetId: string;
+    itemId: string;       // STAC item ID (= stacItemId; kept for store compat)
+    stacItemId: string;   // STAC identifier used for tile config lookups
+  }>;
+  /** Precomputed from items[] for fast annotation-set visibility lookup */
+  stacItemIds: string[];
+}
 
 export interface PendingAnnotation {
   label: string;
