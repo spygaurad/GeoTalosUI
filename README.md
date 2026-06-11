@@ -1,4 +1,4 @@
-# Annotation Tool Frontend
+# GeoTALOS Frontend
 
 A modern, responsive Next.js frontend for the geospatial image annotation platform with a bronze theme (#8c6d2c).
 
