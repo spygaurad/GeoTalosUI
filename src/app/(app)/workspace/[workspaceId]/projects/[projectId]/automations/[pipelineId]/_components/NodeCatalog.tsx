@@ -593,7 +593,7 @@ export function NodeCatalog({ categories, isLoading, isError }: NodeCatalogProps
         <p style={{ marginBottom: '4px' }}>💡 Pro tips:</p>
         <p style={{ marginBottom: '2px' }}>Drag items onto canvas</p>
         <p style={{ marginBottom: '2px' }}>Right-click canvas to add</p>
-        <p>Use toolbar "Add" button</p>
+        <p>Use toolbar &quot;Add&quot; button</p>
       </div>
 
       {/* ── Recipe guide ── */}

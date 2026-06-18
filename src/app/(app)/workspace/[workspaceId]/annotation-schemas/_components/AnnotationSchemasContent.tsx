@@ -5,7 +5,11 @@ import { useQuery, useQueries, useMutation, useQueryClient } from '@tanstack/rea
 import { useAuth } from '@clerk/nextjs';
 import { Search, Plus, X } from 'lucide-react';
 import { toast } from 'sonner';
-import { annotationSchemasApi, type AnnotationClassCreatePayload } from '@/lib/api/annotation-schemas';
+import {
+  annotationSchemasApi,
+  type AnnotationClassCreatePayload,
+  type StyleDefinitionPayload,
+} from '@/lib/api/annotation-schemas';
 import { annotationClassesApi } from '@/lib/api/annotation-classes';
 import { qk } from '@/lib/query-keys';
 import type { AnnotationSchema, AnnotationClass } from '@/types/api';
@@ -69,6 +73,15 @@ export function AnnotationSchemasContent({ workspaceId: _workspaceId }: Annotati
   const createSchemaMutation = useMutation({
     mutationFn: annotationSchemasApi.create,
     onSuccess: (newSchema) => {
+      // Insert the new schema into the cached list so it shows without a refresh,
+      // then reconcile with the server.
+      queryClient.setQueryData<{ items: AnnotationSchema[]; total: number; limit: number; offset: number }>(
+        qk.annotationSchemas.list(),
+        (old) =>
+          old
+            ? { ...old, items: [newSchema, ...old.items], total: old.total + 1 }
+            : old,
+      );
       queryClient.invalidateQueries({ queryKey: qk.annotationSchemas.list() });
       toast.success(`Schema "${newSchema.name}" created`);
       setShowSchemaForm(false);
@@ -110,8 +123,25 @@ export function AnnotationSchemasContent({ workspaceId: _workspaceId }: Annotati
   });
 
   const createClassMutation = useMutation({
-    mutationFn: ({ schemaId, data }: { schemaId: string; data: AnnotationClassCreatePayload }) =>
-      annotationSchemasApi.createClass(schemaId, data),
+    mutationFn: async ({
+      schemaId,
+      data,
+      style,
+    }: {
+      schemaId: string;
+      data: AnnotationClassCreatePayload;
+      style: StyleDefinitionPayload;
+    }) => {
+      const created = await annotationSchemasApi.createClass(schemaId, data);
+      // Persist the chosen colors as a Style record so the row swatch renders
+      // immediately — without this the class shows the grey fallback until edited.
+      await annotationSchemasApi.updateClassStyle(schemaId, created.id, {
+        name: `${data.name} Style`,
+        type: 'polygon',
+        definition: style,
+      });
+      return created;
+    },
     onSuccess: (_data, variables) => {
       // Invalidate classes query to refresh the list
       queryClient.invalidateQueries({ queryKey: qk.annotationSchemas.classes(variables.schemaId) });
@@ -205,14 +235,12 @@ export function AnnotationSchemasContent({ workspaceId: _workspaceId }: Annotati
         description: formData.description || null,
         parent_id: parentId,
         style_id: null,
-        properties: {
-          style: {
-            fillColor: formData.fillColor,
-            strokeColor: formData.strokeColor,
-            strokeWidth: formData.strokeWidth,
-            fillOpacity: formData.fillOpacity,
-          },
-        },
+      },
+      style: {
+        fillColor: formData.fillColor,
+        strokeColor: formData.strokeColor,
+        strokeWidth: formData.strokeWidth,
+        fillOpacity: formData.fillOpacity,
       },
     });
   };

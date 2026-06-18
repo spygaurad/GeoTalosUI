@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 import { Palette } from 'lucide-react';
-import { C } from './constants';
+import { C, darkenHex } from './constants';
 import { ColorPicker } from './ColorPicker';
 
 export interface ClassFormData {
@@ -158,18 +158,10 @@ export function ClassForm({
           </div>
 
           <ColorPicker
-            label="Fill Color"
+            label="Color"
             value={form.fillColor}
-            onChange={(c) => setForm((f) => ({ ...f, fillColor: c }))}
+            onChange={(c) => setForm((f) => ({ ...f, fillColor: c, strokeColor: darkenHex(c) }))}
           />
-
-          <div style={{ marginTop: 12 }}>
-            <ColorPicker
-              label="Stroke Color"
-              value={form.strokeColor}
-              onChange={(c) => setForm((f) => ({ ...f, strokeColor: c }))}
-            />
-          </div>
 
           <div style={{ marginTop: 12 }}>
             <label style={{ display: 'block', fontSize: '0.75rem', color: C.textMuted, marginBottom: 4 }}>

@@ -152,6 +152,7 @@ export const EP = {
     bounds: (id: string) => `annotation-sets/${id}/bounds`,
     features: (id: string) => `annotation-sets/${id}/features`,
     import: (id: string) => `annotation-sets/${id}/import`,
+    export: (id: string) => `annotation-sets/${id}/export`,
     createStandalone: () => `annotation-sets`,
     addAnnotation: (id: string) => `annotation-sets/${id}/annotations`,
     annotationDetail: (setId: string, annId: string) =>

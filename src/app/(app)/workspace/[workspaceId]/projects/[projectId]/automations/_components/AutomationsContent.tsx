@@ -17,7 +17,6 @@ import {
   ArrowRight,
   Archive,
   FileEdit,
-  Loader2,
   Pencil,
   Copy,
   Trash2,

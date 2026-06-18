@@ -1,5 +1,4 @@
 import Link from 'next/link';
-import { TreePine } from 'lucide-react';
 
 export default function AuthLayout({ children }: { children: React.ReactNode }) {
   return (
@@ -8,15 +7,15 @@ export default function AuthLayout({ children }: { children: React.ReactNode }) 
       <div className="px-6 py-4">
         <Link href="/" className="inline-flex items-center gap-2.5 group">
           <img
-            src="/GeoTalos_logo.png"
+            src="/GeoTalos_mark.png"
             alt="GeoTalos"
-            className="h-8 w-auto object-contain"
+            className="h-9 w-auto object-contain select-none"
           />
           <div className="leading-tight">
             <span className="text-base font-bold text-primary-600 group-hover:text-primary-700 transition-colors">
-              GeoTalos
+              GeoTALOS
             </span>
-            <p className="text-[10px] text-gray-400 leading-none">Forest Management</p>
+            <p className="text-[10px] text-gray-400 leading-none">Geoscience Platform</p>
           </div>
         </Link>
       </div>
@@ -30,7 +29,7 @@ export default function AuthLayout({ children }: { children: React.ReactNode }) 
 
       {/* Footer */}
       <div className="py-4 text-center text-xs text-gray-400">
-        &copy; {new Date().getFullYear()} GeoTalos
+        &copy; {new Date().getFullYear()} GeoTALOS
       </div>
     </div>
   );

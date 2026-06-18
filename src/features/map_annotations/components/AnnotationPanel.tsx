@@ -3,13 +3,11 @@
 import React, { useState } from 'react';
 import type { AnnotationSet, AnnotationSchema } from '@/types/api';
 import { useAnnotationSchema } from '@/features/maps/hooks/useAnnotations';
-import { useAnnotationStore } from '@/stores/annotationStore';
 import {
   AnnotationStyleManager,
   AnnotationDrawingTools,
 } from '@/features/map_annotations/components';
 import { Button } from '@/components/ui/button';
-import { Card } from '@/components/ui/card';
 import { Separator } from '@/components/ui/separator';
 import { Palette } from 'lucide-react';
 
@@ -30,7 +28,6 @@ interface AnnotationPanelProps {
 export function AnnotationPanel({ annotationSet }: AnnotationPanelProps) {
   const [showStyleManager, setShowStyleManager] = useState(false);
   const { schema } = useAnnotationSchema(annotationSet.schema_id);
-  const { schemaClasses } = useAnnotationStore();
 
   const classes = (schema as any)?.classes ?? [];
 

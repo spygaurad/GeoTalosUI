@@ -297,12 +297,12 @@ export class MapManager {
 
   // ── Stub methods for features not yet implemented ────────────────────────────
 
-  hasError(id: string): boolean {
+  hasError(_id: string): boolean {
     // TODO: implement error tracking
     return false;
   }
 
-  retryLayer(id: string): void {
+  retryLayer(_id: string): void {
     // TODO: implement layer retry
   }
 
@@ -311,7 +311,7 @@ export class MapManager {
     return true;
   }
 
-  registerViewportCallback(id: string, callback: () => void): void {
+  registerViewportCallback(_id: string, _callback: () => void): void {
     // TODO: implement viewport change callbacks
   }
 

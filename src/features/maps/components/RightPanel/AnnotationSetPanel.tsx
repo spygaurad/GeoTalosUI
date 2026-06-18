@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
-import { Pencil, Layers, Trash2, ImageIcon } from 'lucide-react';
+import { Pencil, Layers, Trash2, ImageIcon, Download } from 'lucide-react';
 import { useMapLayersStore } from '@/stores/mapLayersStore';
 import { annotationSetsApi } from '@/lib/api/annotation-sets';
 import { datasetsApi } from '@/lib/api/datasets';
@@ -28,6 +28,7 @@ interface AnnotationSetPanelProps {
 
 export function AnnotationSetPanel({ annotationSetId, mapId }: AnnotationSetPanelProps) {
   const [confirmRemove, setConfirmRemove] = useState(false);
+  const [downloading, setDownloading] = useState(false);
   const openAnnotationPanel = useMapLayersStore((s) => s.openAnnotationPanel);
   const removeLayer = useMapLayersStore((s) => s.removeLayer);
   const closeRightPanel = useMapLayersStore((s) => s.closeRightPanel);
@@ -76,6 +77,30 @@ export function AnnotationSetPanel({ annotationSetId, mapId }: AnnotationSetPane
         });
       }
     }, 0);
+  };
+
+  const handleDownload = async () => {
+    if (downloading) return;
+    setDownloading(true);
+    try {
+      const fc = await annotationSetsApi.getAllFeatures(annotationSetId);
+      const safeName = (annSet?.name ?? 'annotation-set').replace(/[^a-z0-9-_]+/gi, '_');
+      const blob = new Blob([JSON.stringify(fc, null, 2)], { type: 'application/geo+json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${safeName}.geojson`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+      const count = fc.features?.length ?? 0;
+      toast.success(`Downloaded ${count} feature${count !== 1 ? 's' : ''}`);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Download failed');
+    } finally {
+      setDownloading(false);
+    }
   };
 
   const handleRemoveFromMap = async () => {
@@ -278,6 +303,32 @@ export function AnnotationSetPanel({ annotationSetId, mapId }: AnnotationSetPane
           <Trash2 size={12} />
           {confirmRemove ? 'Click again to remove from map' : 'Remove from map'}
         </button>
+        {!isRasterMask && (
+          <button
+            onClick={handleDownload}
+            disabled={downloading}
+            style={{
+              width: '100%',
+              height: 32,
+              borderRadius: 4,
+              border: `1px solid ${MC.border}`,
+              background: 'transparent',
+              color: MC.text,
+              cursor: downloading ? 'default' : 'pointer',
+              opacity: downloading ? 0.6 : 1,
+              fontSize: 11,
+              fontWeight: 700,
+              letterSpacing: '0.02em',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: 6,
+            }}
+          >
+            <Download size={12} />
+            {downloading ? 'Preparing…' : 'Download GeoJSON'}
+          </button>
+        )}
         {!isRasterMask && (
           <button
             onClick={handleAddAnnotation}

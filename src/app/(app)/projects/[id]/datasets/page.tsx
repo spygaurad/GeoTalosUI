@@ -15,8 +15,8 @@ interface PageProps {
 
 const STATUS_CONFIG: Record<DatasetStatus, { label: string; icon: typeof Clock; color: string }> = {
   pending: { label: 'Pending', icon: Clock, color: 'text-gray-400' },
-  running: { label: 'Ingesting', icon: Loader2, color: 'text-blue-500' },
-  completed: { label: 'Ready', icon: CheckCircle2, color: 'text-emerald-500' },
+  ingesting: { label: 'Ingesting', icon: Loader2, color: 'text-blue-500' },
+  ready: { label: 'Ready', icon: CheckCircle2, color: 'text-emerald-500' },
   failed: { label: 'Failed', icon: AlertCircle, color: 'text-red-500' },
 };
 
@@ -120,13 +120,13 @@ function DatasetRow({ dataset }: { dataset: Dataset }) {
           </div>
           <div className="min-w-0">
             <p className="font-medium text-gray-900 truncate">{dataset.name}</p>
-            {dataset.tags.length > 0 && (
-              <p className="text-xs text-gray-400 truncate">{dataset.tags.join(', ')}</p>
+            {dataset.description && (
+              <p className="text-xs text-gray-400 truncate">{dataset.description}</p>
             )}
           </div>
         </div>
       </td>
-      <td className="px-4 py-3 text-gray-600 hidden sm:table-cell">{dataset.item_count}</td>
+      <td className="px-4 py-3 text-gray-600 hidden sm:table-cell">{dataset.metadata?.file_count ?? 0}</td>
       <td className="px-4 py-3 hidden md:table-cell">
         <span className={`inline-flex items-center gap-1.5 text-xs font-medium ${status.color}`}>
           <StatusIcon className="w-3.5 h-3.5" />

@@ -178,7 +178,7 @@ export default function ProjectSettingsPage({ params }: PageProps) {
   );
 }
 
-function MemberRow({ member, projectId }: { member: ProjectMember; projectId: string }) {
+function MemberRow({ member }: { member: ProjectMember; projectId: string }) {
   const initials = member.user.name
     ? member.user.name.split(' ').map((n) => n[0]).join('').slice(0, 2).toUpperCase()
     : member.user.email.slice(0, 2).toUpperCase();

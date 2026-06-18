@@ -5,13 +5,14 @@ import { createPortal } from 'react-dom';
 import {
   Eye, EyeOff, ChevronDown, ChevronRight,
   GripVertical, X, Loader, AlertTriangle, Pencil,
-  ZoomIn, Trash2, FileImage,
+  ZoomIn, Trash2, FileImage, Download,
   BoxSelect, CheckCircle2,
 } from 'lucide-react';
 import { useSortable } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import { useQuery, useQueryClient, useMutation } from '@tanstack/react-query';
 import { toast } from 'sonner';
+import { downloadJSON } from '@/lib/download-utils';
 import { useMapLayersStore } from '@/stores/mapLayersStore';
 import { datasetsApi } from '@/lib/api/datasets';
 import { annotationSetsApi } from '@/lib/api/annotation-sets';
@@ -67,6 +68,7 @@ export function LayerCard({
   const queryClient = useQueryClient();
   const [expanded, setExpanded] = useState(!!dataset);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
   const [itemActionIds, setItemActionIds] = useState<Record<string, true>>({});
   const [editing, setEditing] = useState(false);
   const [editName, setEditName] = useState(name);
@@ -92,6 +94,17 @@ export function LayerCard({
       if (mapId) void queryClient.invalidateQueries({ queryKey: qk.maps.detail(mapId) });
     },
     onError: () => toast.error('Failed to update review status'),
+  });
+
+  // Export annotation set as GeoJSON
+  const exportMutation = useMutation({
+    mutationFn: async () => {
+      const features = await annotationSetsApi.getAllFeatures(annotationSet!.annotation_set_id);
+      const filename = `${annotationSet?.set_name || 'annotation-set'}.geojson`;
+      downloadJSON(features, filename);
+    },
+    onSuccess: () => toast.success('Downloaded'),
+    onError: () => toast.error('Failed to export annotation set'),
   });
 
   // Drag-and-drop via @dnd-kit
@@ -188,10 +201,15 @@ export function LayerCard({
     }
   };
 
-  const handleDelete = () => {
+  const handleDelete = async () => {
     if (confirmDelete) {
-      onRemove?.();
-      setConfirmDelete(false);
+      setIsDeleting(true);
+      try {
+        await Promise.resolve(onRemove?.());
+        setConfirmDelete(false);
+      } finally {
+        setIsDeleting(false);
+      }
     } else {
       setConfirmDelete(true);
     }
@@ -315,7 +333,9 @@ export function LayerCard({
           height: 36,
           gap: 4,
           padding: '0 4px 0 0',
-          cursor: 'pointer',
+          cursor: isDeleting ? 'default' : 'pointer',
+          opacity: isDeleting ? 0.6 : 1,
+          pointerEvents: isDeleting ? 'none' : 'auto',
         }}
       >
         {/* Drag handle */}
@@ -515,20 +535,21 @@ export function LayerCard({
         {/* Delete */}
         {onRemove && (
           <button
-            onClick={(e) => { e.stopPropagation(); handleDelete(); }}
-            title={confirmDelete ? 'Click again to confirm' : 'Remove layer'}
+            onClick={(e) => { e.stopPropagation(); void handleDelete(); }}
+            disabled={isDeleting}
+            title={isDeleting ? 'Removing...' : confirmDelete ? 'Click again to confirm' : 'Remove layer'}
             style={{
               width: 20, height: 20,
               display: 'flex', alignItems: 'center', justifyContent: 'center',
               background: confirmDelete ? MC.accentDim : 'transparent',
               border: confirmDelete ? `1px solid ${MC.accent}` : 'none',
               color: MC.accent,
-              cursor: 'pointer', flexShrink: 0, borderRadius: 3,
-              opacity: confirmDelete ? 1 : 0.72,
+              cursor: isDeleting ? 'default' : 'pointer', flexShrink: 0, borderRadius: 3,
+              opacity: confirmDelete || isDeleting ? 1 : 0.72,
               transition: 'all 0.15s',
             }}
           >
-            <X size={11} />
+            {isDeleting ? <Loader size={11} style={{ animation: 'spin 1s linear infinite' }} /> : <X size={11} />}
           </button>
         )}
       </div>
@@ -703,6 +724,12 @@ export function LayerCard({
           )}
           {annotationSet && (
             <>
+              <div style={{ height: 1, background: MC.border, margin: '4px 0' }} />
+              <CtxMenuItem
+                icon={<Download size={12} />}
+                label="Export as GeoJSON"
+                onClick={() => { exportMutation.mutate(); setCtxMenu(null); }}
+              />
               <div style={{ height: 1, background: MC.border, margin: '4px 0' }} />
               {(['verified', 'corrected', 'raw'] as AnnotationReviewStatus[])
                 .filter((s) => s !== currentStatus)

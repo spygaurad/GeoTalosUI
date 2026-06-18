@@ -1,7 +1,8 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { ChevronDown } from 'lucide-react';
+import { HexColorPicker } from 'react-colorful';
 import { C, PRESET_COLORS } from './constants';
 
 interface ColorPickerProps {
@@ -12,15 +13,28 @@ interface ColorPickerProps {
 
 export function ColorPicker({ value, onChange, label }: ColorPickerProps) {
   const [showPicker, setShowPicker] = useState(false);
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  // Close when clicking outside the picker.
+  useEffect(() => {
+    if (!showPicker) return;
+    const handler = (e: MouseEvent) => {
+      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
+        setShowPicker(false);
+      }
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [showPicker]);
 
   return (
-    <div style={{ position: 'relative' }}>
+    <div ref={containerRef} style={{ position: 'relative' }}>
       <label style={{ display: 'block', fontSize: '0.75rem', color: C.textMuted, marginBottom: 4 }}>
         {label}
       </label>
       <button
         type="button"
-        onClick={() => setShowPicker(!showPicker)}
+        onClick={() => setShowPicker((s) => !s)}
         style={{
           display: 'flex',
           alignItems: 'center',
@@ -55,7 +69,7 @@ export function ColorPicker({ value, onChange, label }: ColorPickerProps) {
             top: '100%',
             left: 0,
             marginTop: 4,
-            padding: 8,
+            padding: 10,
             background: C.canvas,
             border: `1px solid ${C.border}`,
             borderRadius: 8,
@@ -64,37 +78,50 @@ export function ColorPicker({ value, onChange, label }: ColorPickerProps) {
             width: 'max-content',
           }}
         >
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 4, marginBottom: 8 }}>
+          {/* Full-spectrum palette */}
+          <HexColorPicker
+            color={value}
+            onChange={onChange}
+            style={{ width: 200, height: 160 }}
+          />
+
+          {/* Quick presets */}
+          <div
+            style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(8, 1fr)',
+              gap: 4,
+              marginTop: 10,
+            }}
+          >
             {PRESET_COLORS.map((color) => (
               <button
                 key={color}
                 type="button"
-                onClick={() => {
-                  onChange(color);
-                  setShowPicker(false);
-                }}
+                onClick={() => onChange(color)}
+                title={color}
                 style={{
-                  width: 28,
-                  height: 28,
+                  width: 20,
+                  height: 20,
                   borderRadius: 4,
                   background: color,
-                  border: value === color ? `2px solid ${C.text}` : `1px solid ${C.border}`,
+                  border: value.toLowerCase() === color.toLowerCase() ? `2px solid ${C.text}` : `1px solid ${C.border}`,
                   cursor: 'pointer',
+                  padding: 0,
                 }}
               />
             ))}
           </div>
-          <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-            <input
-              type="color"
-              value={value}
-              onChange={(e) => onChange(e.target.value)}
-              style={{ width: 32, height: 28, border: 'none', borderRadius: 4, cursor: 'pointer' }}
-            />
+
+          {/* Hex input */}
+          <div style={{ display: 'flex', gap: 6, alignItems: 'center', marginTop: 8 }}>
             <input
               type="text"
               value={value}
-              onChange={(e) => onChange(e.target.value)}
+              onChange={(e) => {
+                const v = e.target.value.startsWith('#') ? e.target.value : `#${e.target.value}`;
+                onChange(v);
+              }}
               style={{
                 flex: 1,
                 fontSize: '0.75rem',
@@ -102,6 +129,7 @@ export function ColorPicker({ value, onChange, label }: ColorPickerProps) {
                 border: `1px solid ${C.border}`,
                 borderRadius: 4,
                 outline: 'none',
+                fontFamily: 'monospace',
               }}
             />
           </div>

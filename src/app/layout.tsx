@@ -1,5 +1,5 @@
 import type { Metadata } from 'next';
-import { Inter, Geist } from 'next/font/google';
+import { Geist } from 'next/font/google';
 import { ClerkProvider } from '@clerk/nextjs';
 import { Toaster } from 'sonner';
 import { QueryProvider } from '@/lib/query-client';
@@ -9,14 +9,10 @@ import { cn } from "@/lib/utils";
 
 const geist = Geist({subsets:['latin'],variable:'--font-sans'});
 
-const inter = Inter({
-  subsets: ['latin'],
-  variable: '--font-inter',
-});
-
 export const metadata: Metadata = {
-  title: 'GeoTalos',
-  description: 'Intelligent geospatial forest management platform',
+  title: 'GeoTALOS — Geoscience Platform for Automated Landscape Observation & Spatial Analysis',
+  description:
+    'GeoTALOS is a geoscience platform for automated landscape observation and spatial analysis, with an integrated automation & workflow manager.',
   icons: {
     icon: [{ url: '/GeoTalos_logo.png', type: 'image/png' }],
   },

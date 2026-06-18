@@ -12,6 +12,15 @@ export default function SignUpForm() {
       forceRedirectUrl="/select-org"
       appearance={{
         variables: { colorPrimary: theme.primary },
+        localization: {
+          en: {
+            signUp: {
+              start: {
+                title: 'Create your GeoTalos account',
+              },
+            },
+          },
+        },
       }}
     />
   );

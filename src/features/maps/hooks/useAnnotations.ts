@@ -4,7 +4,6 @@ import { annotationSchemasApi } from '@/lib/api/annotation-schemas';
 import { annotationSetsApi } from '@/lib/api/annotation-sets';
 import { qk } from '@/lib/query-keys';
 import { useAnnotationStore } from '@/stores/annotationStore';
-import type { AnnotationSchema, AnnotationFeature } from '@/types/api';
 import type { GeoJSONGeometry } from '@/types/geo';
 
 /**

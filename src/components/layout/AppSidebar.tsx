@@ -4,27 +4,23 @@ import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import {
   Home,
-  Map,
   FolderOpen,
   Satellite,
   PenTool,
   Tags,
   Bot,
-  Zap,
-  Bell,
-  Settings,
-  Cpu,
-  TreePine,
-  Plus,
+  type LucideIcon,
 } from 'lucide-react';
 import { OrganizationSwitcher, UserButton } from '@clerk/nextjs';
 
-const SECTIONS = [
+type NavItem = { title: string; href: string; icon: LucideIcon; badge?: string };
+
+const SECTIONS: { label: string; items: NavItem[] }[] = [
   {
     label: 'Explore',
     items: [
       { title: 'Dashboard', href: '', icon: Home },
-      { title: 'Map Explorer', href: '/map', icon: Map },
+      // { title: 'Map Explorer', href: '/map', icon: Map },
     ],
   },
   {
@@ -40,16 +36,16 @@ const SECTIONS = [
     label: 'Intelligence',
     items: [
       { title: 'AI Models', href: '/models', icon: Bot },
-      { title: 'Inference', href: '/inference', icon: Zap },
+      // { title: 'Inference', href: '/inference', icon: Zap },
     ],
   },
-  {
-    label: 'Operations',
-    items: [
-      { title: 'Jobs', href: '/jobs', icon: Cpu, badge: '1' },
-      { title: 'Settings', href: '/settings', icon: Settings },
-    ],
-  },
+  // {
+  //   label: 'Operations',
+  //   items: [
+  //     { title: 'Jobs', href: '/jobs', icon: Cpu, badge: '1' },
+  //     { title: 'Settings', href: '/settings', icon: Settings },
+  //   ],
+  // },
 ];
 
 // Shared dark-mode variables for all Clerk popovers in the sidebar
@@ -86,7 +82,8 @@ export function AppSidebar({ workspaceId }: AppSidebarProps) {
         className="flex items-center gap-2.5 px-4 h-12 shrink-0"
         style={{ borderBottom: '1px solid rgba(255,255,255,0.07)' }}
       >
-        <TreePine className="w-4 h-4 shrink-0" style={{ color: '#c4985c' }} />
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img src="/GeoTalos_mark.png" alt="" aria-hidden="true" className="h-7 w-auto shrink-0 object-contain select-none" />
         <span
           style={{
             fontSize: '0.9375rem',
@@ -95,7 +92,7 @@ export function AppSidebar({ workspaceId }: AppSidebarProps) {
             letterSpacing: '-0.01em',
           }}
         >
-          GeoTalos
+          GeoTALOS
         </span>
       </div>
 

@@ -8,9 +8,9 @@ import {
   Cpu,
   Activity,
   Bell,
-  TreePine,
   Satellite,
   BarChart3,
+  Workflow,
   ArrowRight,
   ChevronRight,
   Scan,
@@ -49,11 +49,12 @@ export default async function LandingPage() {
       >
         <div className="max-w-7xl mx-auto px-6 lg:px-8 flex justify-between items-center h-[52px]">
           <div className="flex items-center gap-2.5">
-            <TreePine className="w-5 h-5" style={{ color: '#c4985c' }} aria-hidden="true" />
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src="/GeoTalos_mark.png" alt="" aria-hidden="true" className="h-7 w-auto object-contain select-none" />
             <span
               style={{ fontFamily: 'var(--font-display)', color: '#f5ede0', fontSize: '1.125rem', letterSpacing: '-0.01em', fontWeight: 600 }}
             >
-              GeoTalos
+              Geo<span style={{ letterSpacing: '0.02em' }}>TALOS</span>
             </span>
           </div>
           <div className="flex items-center gap-5">
@@ -101,8 +102,8 @@ export default async function LandingPage() {
                   className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full mb-10"
                   style={{ backgroundColor: '#e8d5b8', color: '#7f5539', fontSize: '0.6875rem', fontWeight: 600, letterSpacing: '0.08em', textTransform: 'uppercase' }}
                 >
-                  <TreePine className="w-3 h-3" aria-hidden="true" />
-                  Geospatial AI Platform
+                  <Workflow className="w-3 h-3" aria-hidden="true" />
+                  Introducing GeoTALOS · Geoscience Platform
                 </div>
 
                 <h1
@@ -115,9 +116,9 @@ export default async function LandingPage() {
                     marginBottom: '1.75rem',
                   }}
                 >
-                  Monitor.<br />
-                  <em style={{ color: '#7f5539', fontStyle: 'italic' }}>Protect.</em><br />
-                  Sustain.
+                  Observe.<br />
+                  <em style={{ color: '#7f5539', fontStyle: 'italic' }}>Automate.</em><br />
+                  Analyze.
                 </h1>
 
                 <p
@@ -125,13 +126,14 @@ export default async function LandingPage() {
                     fontSize: '1.0625rem',
                     lineHeight: 1.65,
                     color: '#6a5c4e',
-                    maxWidth: '440px',
+                    maxWidth: '460px',
                     marginBottom: '2.5rem',
                   }}
                 >
-                  GeoTalos unifies satellite imagery, AI inference, and annotation
-                  workflows into one platform — built for the guardians of the world's
-                  forests.
+                  <strong style={{ color: '#2e3428', fontWeight: 600 }}>GeoTALOS</strong> is a
+                  geoscience platform for automated landscape observation and spatial analysis.
+                  Satellite imagery, AI inference, and an integrated automation &amp; workflow
+                  manager — unified in one place.
                 </p>
 
                 <div className="flex items-center gap-5 flex-wrap">
@@ -198,8 +200,8 @@ export default async function LandingPage() {
                 color: '#e8d5b8',
               }}
             >
-              "From satellite to decision — in a single platform designed for those
-              who protect the world's forests."
+              &quot;From satellite to decision — automated landscape observation and
+              spatial analysis, orchestrated end to end.&quot;
             </p>
           </div>
         </section>
@@ -222,8 +224,8 @@ export default async function LandingPage() {
                   Every tool.<br />One platform.
                 </h2>
                 <p style={{ fontSize: '0.9375rem', color: '#8a7868', maxWidth: '280px', lineHeight: 1.65 }}>
-                  Purpose-built for conservation scientists and forestry professionals
-                  who need precision at scale.
+                  Purpose-built for geoscientists and analysts who need automated
+                  landscape observation and spatial analysis at scale.
                 </p>
 
                 <div className="mt-10">
@@ -286,11 +288,11 @@ export default async function LandingPage() {
                 marginBottom: '1.25rem',
               }}
             >
-              Ready to protect your forests?
+              Ready to automate your landscape analysis?
             </h2>
             <p style={{ fontSize: '1rem', lineHeight: 1.65, color: '#b8c9a0', marginBottom: '2.5rem' }}>
-              Join conservation teams using GeoTalos to detect deforestation,
-              run AI inference, and respond to environmental threats — faster.
+              Bring satellite imagery, AI inference, and automated workflows together with
+              GeoTALOS — observe, analyze, and act on your landscape, faster.
             </p>
             <Link
               href="/sign-up"
@@ -311,11 +313,12 @@ export default async function LandingPage() {
       >
         <div className="max-w-7xl mx-auto px-6 lg:px-8 flex items-center justify-between">
           <div className="flex items-center gap-2">
-            <TreePine className="w-4 h-4" style={{ color: '#c4985c' }} aria-hidden="true" />
-            <span style={{ fontSize: '0.8125rem', fontWeight: 500, color: '#8a9a7a' }}>GeoTalos</span>
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src="/GeoTalos_mark.png" alt="" aria-hidden="true" className="h-5 w-auto object-contain select-none" />
+            <span style={{ fontSize: '0.8125rem', fontWeight: 500, color: '#8a9a7a' }}>GeoTALOS</span>
           </div>
           <p style={{ fontSize: '0.75rem', color: '#5a6a5a' }}>
-            &copy; {new Date().getFullYear()} GeoTalos. All rights reserved.
+            &copy; {new Date().getFullYear()} GeoTALOS. All rights reserved.
           </p>
         </div>
       </footer>
@@ -420,16 +423,31 @@ const CANOPY_BLOBS = [
 ];
 
 const STATS = [
+  { value: 'Automated', label: 'Workflow manager' },
   { value: 'Real-time', label: 'Job monitoring' },
-  { value: 'COG', label: 'Raster support' },
-  { value: 'Org-based', label: 'Collaboration' },
+  { value: 'Multi-temporal', label: 'Spatial analysis' },
 ];
 
 const FEATURES = [
   {
+    icon: Workflow,
+    title: 'Automation & Workflow Manager',
+    desc: 'Compose multi-step geoprocessing pipelines in a visual workflow manager — chain ingestion, inference, change detection, and exports, then run them on a schedule or trigger.',
+  },
+  {
     icon: Map,
     title: 'Interactive Map Explorer',
     desc: 'Visualize datasets, annotations, and tracked objects on a live geospatial map with dynamic layer controls and COG raster rendering.',
+  },
+  {
+    icon: Cpu,
+    title: 'AI Model Inference',
+    desc: 'Run detection and segmentation models on any dataset. Track job progress and review outputs inline on the map.',
+  },
+  {
+    icon: Activity,
+    title: 'Change Detection & Spatial Analysis',
+    desc: 'Timeseries queries and change detection over multi-temporal imagery, with exportable results and area statistics.',
   },
   {
     icon: Satellite,
@@ -442,28 +460,13 @@ const FEATURES = [
     desc: 'Create, review, and export polygon annotations with label schema management, versioning, and bulk import/export.',
   },
   {
-    icon: Cpu,
-    title: 'AI Model Inference',
-    desc: 'Run detection and segmentation models on any dataset. Track job progress and review outputs inline on the map.',
-  },
-  {
-    icon: Activity,
-    title: 'Change Detection & Analysis',
-    desc: 'Timeseries queries and change detection over multi-temporal imagery with exportable results and area statistics.',
-  },
-  {
-    icon: Bell,
-    title: 'Alerts & Automations',
-    desc: 'Subscribe to area-of-interest alerts with configurable thresholds, and schedule automated inference workflows.',
-  },
-  {
     icon: BarChart3,
     title: 'Object Tracking',
     desc: 'Track objects across time with observation timelines, priority queuing, and merge conflict resolution.',
   },
   {
-    icon: TreePine,
-    title: 'Multi-Org Collaboration',
-    desc: 'Manage members and roles per workspace. Isolate data per organization with fine-grained Clerk-based permissions.',
+    icon: Bell,
+    title: 'Alerts & Monitoring',
+    desc: 'Subscribe to area-of-interest alerts with configurable thresholds, and surface changes the moment automated runs detect them.',
   },
 ];

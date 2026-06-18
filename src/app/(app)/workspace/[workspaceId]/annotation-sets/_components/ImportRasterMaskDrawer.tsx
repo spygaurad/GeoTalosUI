@@ -246,8 +246,6 @@ export function ImportRasterMaskDrawer({ open, onClose, onCreated }: Props) {
 
   const classes = classesQ.data?.items ?? [];
 
-  // Auto-fill set name from dataset name
-  const selectedDataset = datasetsQ.data?.find((d) => d.id === datasetId);
   const selectedItem = itemsQ.data?.items.find((it) => it.id === datasetItemId || it.stac_item_id === datasetItemId);
 
   const onDatasetChange = useCallback((id: string) => {

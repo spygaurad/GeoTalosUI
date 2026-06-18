@@ -1,18 +1,14 @@
 import { auth } from '@clerk/nextjs/server';
 import Link from 'next/link';
 import {
-  Map,
   Database,
   Tag,
   Cpu,
-  Activity,
-  Bell,
-  Briefcase,
   ArrowRight,
 } from 'lucide-react';
 
 export default async function DashboardPage() {
-  const { userId } = await auth();
+  await auth();
 
   return (
     <div className="space-y-6">

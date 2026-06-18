@@ -21,11 +21,10 @@ import {
   Loader2,
   AlertCircle,
   UploadCloud,
-  Cpu,
   Workflow,
 } from 'lucide-react';
-import type { ProjectMap, Dataset, ProjectMember, Pipeline, PipelineStatus, PipelineTriggerType } from '@/types/api';
-import type { Job, JobStatus } from '@/types/common';
+import type { ProjectMap, Dataset, ProjectMember, PipelineStatus, PipelineTriggerType } from '@/types/api';
+import type { JobStatus } from '@/types/common';
 import { automationApi } from '@/lib/api/automation';
 
 // ── Topographic SVG ──────────────────────────────────────────────────────────
@@ -428,7 +427,7 @@ function DatasetsTab({ projectId }: { projectId: string }) {
       <div className="py-16 text-center">
         <p style={{ fontSize: '1rem', fontWeight: 600, color: '#2e3428', marginBottom: '6px' }}>No datasets linked</p>
         <p style={{ fontSize: '0.875rem', color: '#9a8878', marginBottom: '20px' }}>
-          Add raster or vector datasets to your project's maps.
+          Add raster or vector datasets to your project&apos;s maps.
         </p>
         <Link
           href={`/workspace/${projectId}/datasets/new`}
@@ -790,7 +789,7 @@ function ActivityTab() {
   return (
     <div className="pt-6">
       <div style={{ borderTop: '1px solid #e8d8c4' }}>
-        {MOCK_ACTIVITY.map((item, i) => (
+        {MOCK_ACTIVITY.map((item) => (
           <div
             key={item.id}
             className="flex items-start gap-3 py-4"
@@ -838,7 +837,7 @@ const ROLE_STYLE: Record<string, { bg: string; color: string }> = {
   viewer: { bg: '#f0e4d4', color: '#9a8878' },
 };
 
-function MembersTab({ projectId }: { projectId: string }) {
+function MembersTab({ projectId: _projectId }: { projectId: string }) {
   return (
     <div className="pt-6">
       <div style={{ borderTop: '1px solid #e8d8c4' }}>
@@ -1027,7 +1026,7 @@ export function ProjectContent({ projectId, workspaceId }: ProjectContentProps) 
 
 // ── Mock data (replaced when API is wired) ───────────────────────────────────
 
-const MOCK_MAPS: ProjectMap[] = [
+const _MOCK_MAPS: ProjectMap[] = [
   {
     id: 'm1', project_id: 'p1', organization_id: 'o1',
     name: 'Amazon Canopy Density 2024',
@@ -1060,7 +1059,7 @@ const MOCK_MAPS: ProjectMap[] = [
   },
 ];
 
-const MOCK_DATASETS: Dataset[] = [
+const _MOCK_DATASETS: Dataset[] = [
   {
     id: 'd1', organization_id: 'o1',
     name: 'Sentinel-2 Amazon Basin 2024', stac_collection_id: 'sentinel-2-l2a',

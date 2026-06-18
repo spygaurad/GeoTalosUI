@@ -80,7 +80,7 @@ export default function ProjectModelsPage({ params }: PageProps) {
   );
 }
 
-function ModelCard({ model, projectId }: { model: MLModel; projectId: string }) {
+function ModelCard({ model }: { model: MLModel; projectId: string }) {
   return (
     <div className="bg-white rounded-xl border border-primary-100 p-5 space-y-4 hover:border-primary-300 hover:shadow-sm transition-all">
       <div className="flex items-start justify-between gap-2">
@@ -88,9 +88,11 @@ function ModelCard({ model, projectId }: { model: MLModel; projectId: string }) 
           <Cpu className="w-4 h-4 text-primary-600" />
         </div>
         <span
-          className={`text-xs font-medium px-2 py-0.5 rounded-full ${TYPE_COLOR[model.type]}`}
+          className={`text-xs font-medium px-2 py-0.5 rounded-full ${
+            (model.type && TYPE_COLOR[model.type as ModelType]) || 'bg-gray-50 text-gray-700'
+          }`}
         >
-          {model.type}
+          {model.type ?? 'unknown'}
         </span>
       </div>
 

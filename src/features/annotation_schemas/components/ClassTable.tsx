@@ -22,7 +22,6 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from '@/components/ui/popover';
-import { Badge } from '@/components/ui/badge';
 import { ChevronDown, Plus, Trash2, Palette } from 'lucide-react';
 import { annotationSchemasApi } from '@/lib/api/annotation-schemas';
 import { annotationClassesApi } from '@/lib/api/annotation-classes';

@@ -594,7 +594,7 @@ export const useMapLayersStore = create<MapLayersState>()(
 
     removeAoiBoundedDataset: (layerId) => {
       set((s) => {
-        const { [layerId]: removed, ...rest } = s.layers;
+        const { [layerId]: _removed, ...rest } = s.layers;
         return { layers: rest };
       });
     },

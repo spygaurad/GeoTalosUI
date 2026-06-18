@@ -49,7 +49,7 @@ export const useMapStore = create<MapState>()(
     setActiveDrawTool: (activeDrawTool) => set({ activeDrawTool }),
     setCursorLatLng: (cursorLatLng) => set({ cursorLatLng }),
     setDrawnGeometry: (drawnGeometry) =>
-      set((s) => ({
+      set((_s) => ({
         drawnGeometry,
         // Clear shape info when geometry is cleared
         ...(drawnGeometry === null

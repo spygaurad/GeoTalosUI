@@ -1,7 +1,7 @@
 'use client';
 
 import {
-  Bot, Play, Activity, BarChart3, Layers, GitCompare, ChevronRight, SlidersHorizontal,
+  Bot, Play, ChevronRight, SlidersHorizontal,
 } from 'lucide-react';
 import { MC } from '../../mapColors';
 

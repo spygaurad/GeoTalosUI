@@ -77,7 +77,7 @@ const ACTION_TYPES = [
 ] as const;
 
 export default function ProjectAutomationsPage({ params }: PageProps) {
-  const { id } = use(params);
+  const { id: _id } = use(params);
 
   return (
     <div className="space-y-8">

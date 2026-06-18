@@ -5,7 +5,6 @@ import { Handle, Position, type NodeProps, useReactFlow } from '@xyflow/react';
 import { useQuery } from '@tanstack/react-query';
 import {
   Zap,
-  Calendar,
   Hand,
   Database,
   Filter,
@@ -13,7 +12,6 @@ import {
   Search,
   Bot,
   Play,
-  Wand2,
   PenTool,
   GitCompare,
   BarChart3,

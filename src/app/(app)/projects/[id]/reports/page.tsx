@@ -47,7 +47,7 @@ const REPORT_TEMPLATES = [
 ] as const;
 
 export default function ProjectReportsPage({ params }: PageProps) {
-  const { id } = use(params);
+  const { id: _id } = use(params);
 
   return (
     <div className="space-y-6">

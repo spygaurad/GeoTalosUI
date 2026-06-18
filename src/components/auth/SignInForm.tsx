@@ -12,6 +12,15 @@ export default function SignInForm() {
       forceRedirectUrl="/workspace"
       appearance={{
         variables: { colorPrimary: theme.primary },
+        localization: {
+          en: {
+            signIn: {
+              start: {
+                title: 'Sign in to GeoTalos',
+              },
+            },
+          },
+        },
       }}
     />
   );

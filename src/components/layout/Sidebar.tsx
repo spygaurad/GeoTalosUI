@@ -1,20 +1,12 @@
 'use client';
 
-import { createContext, useContext, ReactNode } from 'react';
+import { createContext, useContext } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
 import clsx from 'clsx';
 import {
-  Map,
   Folder,
   Database,
-  Tag,
-  Activity,
-  BarChart3,
-  Bell,
   Cpu,
-  Zap,
-  Briefcase,
-  Settings,
   LayoutDashboard,
 } from 'lucide-react';
 import { useHoverableSidebar } from '@/hooks/use-hoverable-sidebar';

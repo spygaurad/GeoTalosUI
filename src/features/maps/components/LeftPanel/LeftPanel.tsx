@@ -1,8 +1,8 @@
 'use client';
 
 import { useState, useCallback, useMemo, useEffect } from 'react';
-import { useQueryClient } from '@tanstack/react-query';
-import { Layers, ChevronLeft, ChevronRight, ChevronDown, Plus } from 'lucide-react';
+import { useQueryClient, useQuery } from '@tanstack/react-query';
+import { Layers, ChevronLeft, ChevronRight, ChevronDown, Plus, ChevronUp } from 'lucide-react';
 import { AnnotationSetPicker } from './AnnotationSetPicker';
 import type { AnnotationSet as ApiAnnotationSet, AnnotationClass } from '@/types/api';
 import {
@@ -86,6 +86,8 @@ export function LeftPanel({
   // Which AOI layers are expanded to reveal their nested child layers.
   // Default collapsed so the list stays tidy until the user opts in.
   const [expandedAois, setExpandedAois] = useState<Record<string, boolean>>({});
+  const [selectedSchemaId, setSelectedSchemaId] = useState<string | null>(null);
+  const [expandedSchemas, setExpandedSchemas] = useState<Record<string, boolean>>({});
   const isCompact = useIsCompact();
   const queryClient = useQueryClient();
   const [legendClassMeta, setLegendClassMeta] = useState<Record<string, { name: string; description?: string }>>({});
@@ -93,6 +95,21 @@ export function LeftPanel({
   const applyReorder = useMapLayersStore((s) => s.applyReorder);
   const removeLayer = useMapLayersStore((s) => s.removeLayer);
   const addAnnotationSetLayer = useMapLayersStore((s) => s.addAnnotationSetLayer);
+
+  // Fetch available annotation schemas for the legend browser
+  const { data: schemasData } = useQuery({
+    queryKey: qk.annotationSchemas.list(),
+    queryFn: () => annotationSchemasApi.list(100),
+  });
+  const schemas = schemasData?.items ?? [];
+
+  // Fetch classes for selected schema
+  const { data: selectedSchemaData } = useQuery({
+    queryKey: selectedSchemaId ? qk.annotationSchemas.classes(selectedSchemaId) : [],
+    queryFn: () => selectedSchemaId ? annotationSchemasApi.getClasses(selectedSchemaId) : Promise.resolve({ items: [] }),
+    enabled: !!selectedSchemaId,
+  });
+  const selectedSchemaClasses = selectedSchemaData?.items ?? [];
 
   // Picker state — `mode` drives which filters the picker uses.
   type PickerMode =
@@ -754,6 +771,120 @@ export function LeftPanel({
         {/* ── LEGEND tab ─────────────────────────────────────── */}
         {tab === 'legend' && (
           <div style={{ padding: '8px 12px' }}>
+            {/* Schema browser */}
+            {schemas.length > 0 && (
+              <div style={{ marginBottom: 16 }}>
+                <div style={{
+                  fontSize: 10,
+                  fontWeight: 700,
+                  letterSpacing: '0.08em',
+                  textTransform: 'uppercase',
+                  color: MC.sectionLabel,
+                  marginBottom: 6,
+                }}>
+                  Annotation Schemas
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                  {schemas.map((schema) => (
+                    <div key={schema.id}>
+                      <button
+                        onClick={() => {
+                          setSelectedSchemaId(selectedSchemaId === schema.id ? null : schema.id);
+                          if (selectedSchemaId !== schema.id) {
+                            setExpandedSchemas((prev) => ({ ...prev, [schema.id]: true }));
+                          }
+                        }}
+                        style={{
+                          width: '100%',
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: 6,
+                          padding: '6px 8px',
+                          background: selectedSchemaId === schema.id ? MC.accentDim : 'transparent',
+                          border: `1px solid ${selectedSchemaId === schema.id ? MC.accent : MC.border}`,
+                          borderRadius: 4,
+                          cursor: 'pointer',
+                          color: MC.text,
+                          fontSize: 11,
+                          fontWeight: 500,
+                          textAlign: 'left',
+                          transition: 'all 0.15s',
+                        }}
+                      >
+                        {selectedSchemaId === schema.id ? (
+                          <ChevronDown size={12} style={{ flexShrink: 0, color: MC.accent }} />
+                        ) : (
+                          <ChevronRight size={12} style={{ flexShrink: 0, color: MC.textMuted }} />
+                        )}
+                        <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          {schema.name}
+                        </span>
+                        {selectedSchemaId === schema.id && selectedSchemaClasses.length > 0 && (
+                          <span style={{ fontSize: 9, color: MC.textMuted, flexShrink: 0 }}>
+                            {selectedSchemaClasses.length}
+                          </span>
+                        )}
+                      </button>
+
+                      {/* Classes for selected schema */}
+                      {selectedSchemaId === schema.id && (
+                        <div style={{ padding: '6px 8px 8px 28px', display: 'flex', flexDirection: 'column', gap: 3 }}>
+                          {selectedSchemaClasses.length > 0 ? (
+                            selectedSchemaClasses.map((cls) => {
+                              const fillColor = cls.style?.definition?.fillColor ?? MC.accent;
+                              return (
+                                <div key={cls.id} style={{ display: 'flex', alignItems: 'flex-start', gap: 6 }}>
+                                  <div style={{
+                                    width: 8,
+                                    height: 8,
+                                    borderRadius: 2,
+                                    background: fillColor,
+                                    flexShrink: 0,
+                                    opacity: 0.85,
+                                    marginTop: 2,
+                                  }} />
+                                  <div style={{ flex: 1, minWidth: 0 }}>
+                                    <span style={{
+                                      fontSize: 11,
+                                      color: MC.textSecondary,
+                                      overflow: 'hidden',
+                                      textOverflow: 'ellipsis',
+                                      whiteSpace: 'nowrap',
+                                      display: 'block',
+                                    }}>
+                                      {cls.name || cls.path || `Class ${cls.id.slice(0, 8)}`}
+                                    </span>
+                                    {cls.description && (
+                                      <span style={{
+                                        fontSize: 10,
+                                        color: MC.textMuted,
+                                        lineHeight: 1.3,
+                                        display: '-webkit-box',
+                                        WebkitLineClamp: 2,
+                                        WebkitBoxOrient: 'vertical',
+                                        overflow: 'hidden',
+                                      }}>
+                                        {cls.description}
+                                      </span>
+                                    )}
+                                  </div>
+                                </div>
+                              );
+                            })
+                          ) : (
+                            <div style={{ fontSize: 10, color: MC.textMuted, fontStyle: 'italic', padding: '3px 0' }}>
+                              No classes in schema
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+                <div style={{ height: 1, background: MC.border, margin: '12px 0' }} />
+              </div>
+            )}
+
             {/* Annotation sets with class legends */}
             {loadedAnnotationLegendSections.map((section) => (
               <LegendSection key={section.layerId} title={section.title} subtitle={section.description}>

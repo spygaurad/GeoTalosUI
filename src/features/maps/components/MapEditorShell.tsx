@@ -7,7 +7,7 @@ import { useAuth } from '@clerk/nextjs';
 import { toast } from 'sonner';
 
 import { useMapStore, getMapInstance } from '@/stores/mapStore';
-import { useMapLayersStore, wasLayerLocallyRemoved } from '@/stores/mapLayersStore';
+import { useMapLayersStore, wasLayerLocallyRemoved, markLayerLocallyRemoved } from '@/stores/mapLayersStore';
 import type { DrawTool, BasemapId } from '@/stores/mapStore';
 
 import { mapsApi } from '@/lib/api/maps';
@@ -231,7 +231,7 @@ export function MapEditorShell({ workspaceId, projectId, mapId }: MapEditorShell
     if (!mapData?.layers?.length) return;
 
     // Compute the set of layer IDs present in the latest mapData
-    const backendLayerIdSet = new Set(
+    const _backendLayerIdSet = new Set(
       mapData.layers.map((bl) => {
         if (bl.source_type === 'annotation_set' && bl.annotation_set_id) return `annset-${bl.annotation_set_id}`;
         if (bl.source_config?.aoi_type === 'bbox') return (bl.source_config.layer_id as string) ?? null;
@@ -366,7 +366,7 @@ export function MapEditorShell({ workspaceId, projectId, mapId }: MapEditorShell
                 // For old layers without source_config.dataset_id, we'll fetch tile config
                 // which returns dataset_id, allowing us to backfill parentDatasetId
                 // First, try searching datasets to find which one has this item
-                const dsMatch = datasets?.find((d) => 
+                const _dsMatch = datasets?.find((d) =>
                   d.id && d.status === 'ready' // Only check ready datasets
                 );
                 // If still no match, the layer won't have bounds but tiles may still work
@@ -923,21 +923,24 @@ export function MapEditorShell({ workspaceId, projectId, mapId }: MapEditorShell
       mapData?.layers?.find((layer) => layer.source_type === 'dataset' && layer.dataset_id === datasetId)?.id;
     if (datasetBackendId) backendIdsToDelete.add(datasetBackendId);
 
-    // Remove all linked item layers and the dataset layer from the UI immediately.
-    // removeLayer() marks each id as locally removed so the mapData re-sync effect
-    // won't re-add them if mapData re-fetches before the backend DELETE propagates.
-    itemLayerIds.forEach((layerId) => removeLayer(layerId));
-    removeLayer(datasetId);
-
+    // Delete from backend first, then remove from UI.
     if (backendIdsToDelete.size > 0) {
       const results = await Promise.allSettled(
         [...backendIdsToDelete].map((backendId) => datasetsApi.deleteMapLayer(mapId, backendId)),
       );
       if (results.some((result) => result.status === 'rejected')) {
-        toast.error('Some map layers could not be removed');
+        toast.error('Failed to remove dataset from map');
+        return; // Don't remove from UI if backend delete failed
       }
     }
 
+    // Backend delete succeeded — now remove from UI.
+    // removeLayer() marks each id as locally removed so the mapData re-sync effect
+    // won't re-add them if mapData re-fetches before the backend DELETE propagates.
+    itemLayerIds.forEach((layerId) => removeLayer(layerId));
+    removeLayer(datasetId);
+
+    toast.success('Dataset removed from map');
     await queryClient.invalidateQueries({ queryKey: qk.maps.detail(mapId) });
   }, [mapData?.layers, mapId, removeLayer, queryClient]);
 
@@ -952,22 +955,31 @@ export function MapEditorShell({ workspaceId, projectId, mapId }: MapEditorShell
     // A set may also have a legacy map_layers row (created by the sync effect),
     // so we clean up both. The unmount 404s when there's no mount row; that's a
     // valid "already detached" state, so we swallow it and still drop the layer.
-    let unmountFatal = false;
     try {
       await annotationSetsApi.unmount(mapId, setId);
     } catch (err) {
       const status = (err as { response?: { status?: number } })?.response?.status;
-      if (status !== 404) unmountFatal = true;
+      if (status !== 404) {
+        toast.error('Failed to remove annotation set from map');
+        return; // Don't remove from UI if unmount failed
+      }
+      // 404 is ok — already unmounted, continue to clean up legacy rows
     }
-    if (unmountFatal) {
-      toast.error('Unable to remove annotation set from map');
-      return;
-    }
+
+    // Clean up legacy map_layer rows if they exist
     const backendId = useMapLayersStore.getState().backendLayerIds[layerId];
     if (backendId) {
-      await datasetsApi.deleteMapLayer(mapId, backendId).catch(() => {});
+      try {
+        await datasetsApi.deleteMapLayer(mapId, backendId);
+      } catch (err) {
+        // Log but don't fail — the unmount already succeeded
+        console.warn('Failed to clean up legacy annotation set layer:', err);
+      }
     }
+
+    // Backend unmount succeeded — now remove from UI
     removeLayer(layerId);
+    toast.success('Annotation set removed from map');
     await Promise.all([
       queryClient.invalidateQueries({ queryKey: qk.annotationSets.listByMap(mapId) }),
       queryClient.invalidateQueries({ queryKey: qk.maps.detail(mapId) }),
@@ -981,8 +993,8 @@ export function MapEditorShell({ workspaceId, projectId, mapId }: MapEditorShell
       try {
         await mapAoisApi.deleteAoi(mapId, backendId);
       } catch {
-        toast.error('Unable to delete AOI');
-        return;
+        toast.error('Failed to delete AOI');
+        return; // Don't remove from UI if backend delete failed
       }
     }
 
@@ -999,12 +1011,33 @@ export function MapEditorShell({ workspaceId, projectId, mapId }: MapEditorShell
         legacyMatches.map((l) => datasetsApi.deleteMapLayer(mapId, l.id)),
       );
       if (results.some((r) => r.status === 'rejected')) {
-        toast.error('Unable to delete legacy AOI');
-        return;
+        toast.error('Failed to clean up legacy AOI');
+        return; // Don't remove from UI if cleanup failed
       }
     }
 
+    // CASCADE DELETE: Remove all child layers nested under this AOI
+    const state = useMapLayersStore.getState();
+    const childLayerIds = Object.entries(state.layers)
+      .filter(([_, layer]) => layer.parentAoiId === aoiLayerId)
+      .map(([id]) => id);
+
+    // Remove each child layer and mark as locally removed
+    childLayerIds.forEach((childId) => {
+      removeLayer(childId);
+      markLayerLocallyRemoved(childId);
+    });
+
+    // Backend deletion succeeded — now remove AOI itself from UI
     removeLayer(aoiLayerId);
+    markLayerLocallyRemoved(aoiLayerId);
+
+    if (childLayerIds.length > 0) {
+      toast.success(`AOI and ${childLayerIds.length} nested layer${childLayerIds.length !== 1 ? 's' : ''} removed from map`);
+    } else {
+      toast.success('AOI removed from map');
+    }
+
     queryClient.invalidateQueries({ queryKey: qk.mapAois.list(mapId) });
     if (legacyMatches.length > 0) {
       queryClient.invalidateQueries({ queryKey: qk.maps.detail(mapId) });
@@ -1529,7 +1562,7 @@ export function MapEditorShell({ workspaceId, projectId, mapId }: MapEditorShell
   );
 
   // ── Layer reorder handler ─────────────────────────────────
-  const handleLayerMove = useCallback((layerId: string, direction: 'up' | 'down') => {
+  const _handleLayerMove = useCallback((layerId: string, direction: 'up' | 'down') => {
     const result = useMapLayersStore.getState().moveLayer(layerId, direction);
     if (!result) return;
 

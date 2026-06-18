@@ -4,7 +4,6 @@ import { use } from 'react';
 import { useOrganization } from '@clerk/nextjs';
 import { useQuery } from '@tanstack/react-query';
 import Link from 'next/link';
-import { useRouter } from 'next/navigation';
 import { Database, Activity, Bell, Briefcase, Zap, Map, ArrowRight } from 'lucide-react';
 import { qk } from '@/lib/query-keys';
 import { datasetsApi } from '@/lib/api/datasets';
@@ -18,7 +17,6 @@ interface PageProps {
 export default function ProjectOverviewPage({ params }: PageProps) {
   const { id } = use(params);
   const { organization } = useOrganization();
-  const router = useRouter();
   const orgId = organization?.id ?? '';
 
   const { data: datasets } = useQuery({

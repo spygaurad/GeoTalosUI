@@ -446,7 +446,7 @@ function SectionHeader({ icon, label }: { icon: React.ReactNode; label: string }
   );
 }
 
-function AnalysisBtn({
+function _AnalysisBtn({
   icon, label, disabled, loading, onClick,
 }: {
   icon: React.ReactNode; label: string; disabled: boolean; loading: boolean; onClick: () => void;

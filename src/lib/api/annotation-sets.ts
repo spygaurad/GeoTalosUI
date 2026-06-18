@@ -132,6 +132,12 @@ export const annotationSetsApi = {
       .post(EP.annotationSets.import(setId), { json: data })
       .json<{ job_id: string; status: string }>(),
 
+  /** Get all features in an annotation set as GeoJSON for direct download. */
+  getAllFeatures: (setId: string) =>
+    apiClient
+      .get(EP.annotationSets.features(setId), { searchParams: { limit: 10000, offset: 0 } })
+      .json<GeoJSONFeatureCollection & { total?: number }>(),
+
   /** Create an annotation set on a map. */
   create: (mapId: string, data: AnnotationSetCreatePayload) =>
     apiClient

@@ -35,7 +35,7 @@ interface RightPanelProps {
   datasets?: Dataset[];
 }
 
-export function RightPanel({ topOffset, bottomOffset, mapId, projectId, datasets = [] }: RightPanelProps) {
+export function RightPanel({ topOffset, bottomOffset, mapId, projectId }: RightPanelProps) {
   const rightPanelMode = useMapLayersStore((s) => s.rightPanelMode);
   const selectedFeature = useMapLayersStore((s) => s.selectedFeature);
   const selectedLayerId = useMapLayersStore((s) => s.selectedLayerId);

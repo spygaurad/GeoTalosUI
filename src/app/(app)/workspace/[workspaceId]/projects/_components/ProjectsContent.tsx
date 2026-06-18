@@ -316,7 +316,7 @@ export function ProjectsContent({ workspaceId }: { workspaceId: string }) {
         <EmptyProjects workspaceId={workspaceId} />
       ) : projects.length === 0 ? (
         <p style={{ fontSize: '0.875rem', color: '#9a8878', paddingTop: '2rem' }}>
-          No projects match "{search}"
+          No projects match &quot;{search}&quot;
         </p>
       ) : (
         <div>

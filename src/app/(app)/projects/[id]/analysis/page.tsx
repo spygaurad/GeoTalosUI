@@ -47,7 +47,7 @@ const ANALYSIS_TOOLS = [
 ] as const;
 
 export default function ProjectAnalysisPage({ params }: PageProps) {
-  const { id } = use(params);
+  const { id: _id } = use(params);
 
   return (
     <div className="space-y-6">

@@ -1,6 +1,6 @@
 import { apiClient } from './client';
 import { EP } from './endpoints';
-import type { Project } from '@/types/api';
+import type { Project, ProjectMember } from '@/types/api';
 import type { PaginatedResponse } from '@/types/common';
 
 export const projectsApi = {
@@ -18,4 +18,7 @@ export const projectsApi = {
 
   delete: (id: string) =>
     apiClient.delete(EP.projects.delete(id)).json<void>(),
+
+  listMembers: (id: string) =>
+    apiClient.get(EP.projects.members(id)).json<ProjectMember[]>(),
 };

@@ -14,7 +14,6 @@
 import { useEffect, useRef } from 'react';
 import { useMapLayersStore } from '@/stores/mapLayersStore';
 import { datasetsApi } from '@/lib/api/datasets';
-import { getMapManager } from '@/features/maps/MapManager';
 
 const PREFETCH_COUNT = 3;
 

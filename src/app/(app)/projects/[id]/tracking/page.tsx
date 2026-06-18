@@ -3,7 +3,7 @@
 import { use } from 'react';
 import { useOrganization } from '@clerk/nextjs';
 import { useQuery } from '@tanstack/react-query';
-import { Activity, AlertTriangle } from 'lucide-react';
+import { Activity } from 'lucide-react';
 import { qk } from '@/lib/query-keys';
 import { trackingApi } from '@/lib/api/tracking';
 import type { TrackedObject, TrackedObjectStatus, Priority } from '@/types/api';
