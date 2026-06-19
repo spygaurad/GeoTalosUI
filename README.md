@@ -1,25 +1,40 @@
-# GeoTalos — Frontend
+<div align="center">
 
-![Next.js](https://img.shields.io/badge/Next.js-15-black?style=flat-square&logo=next.js)
-![React](https://img.shields.io/badge/React-19-61dafb?style=flat-square&logo=react)
-![TypeScript](https://img.shields.io/badge/TypeScript-5-3178c6?style=flat-square&logo=typescript)
-![Tailwind CSS](https://img.shields.io/badge/Tailwind-3.4-38b2ac?style=flat-square&logo=tailwindcss)
-![Zustand](https://img.shields.io/badge/Zustand-4-43e8c9?style=flat-square)
-![Leaflet](https://img.shields.io/badge/Leaflet-1.9-199900?style=flat-square&logo=leaflet)
-![React Query](https://img.shields.io/badge/React%20Query-5-ff4154?style=flat-square)
-![Clerk](https://img.shields.io/badge/Clerk-7-6c47ff?style=flat-square&logo=clerk)
+  <h1 align="center">
+    <img src="public/GeoTalos_logo.png" alt="GeoTALOS logo" width="36" height="36" style="vertical-align: middle; margin-top: -6px; margin-right: 12px;">GeoTalos — Frontend
+  </h1>
 
-Geospatial forest management platform. Discover satellite imagery, run AI models, review annotations, and automate monitoring workflows on an interactive map.
+  <p align="center">
+    <strong>The map-centric web application for the GeoTALOS geospatial forest management platform.</strong>
+  </p>
 
-## Features
+  [![Next.js](https://img.shields.io/badge/Next.js-15-black?style=flat-square&logo=next.js)](#)
+  [![React](https://img.shields.io/badge/React-19-61dafb?style=flat-square&logo=react)](#)
+  [![TypeScript](https://img.shields.io/badge/TypeScript-5-3178c6?style=flat-square&logo=typescript)](#)
+  [![Tailwind CSS](https://img.shields.io/badge/Tailwind-3.4-38b2ac?style=flat-square&logo=tailwindcss)](#)
+  [![Zustand](https://img.shields.io/badge/Zustand-4-43e8c9?style=flat-square)](#)
+  [![Leaflet](https://img.shields.io/badge/Leaflet-1.9-199900?style=flat-square&logo=leaflet)](#)
+  [![React Query](https://img.shields.io/badge/React%20Query-5-ff4154?style=flat-square)](#)
+  [![Clerk](https://img.shields.io/badge/Clerk-7-6c47ff?style=flat-square&logo=clerk)](#)
 
-🗺️ **Map-Centric Workspace** — Explore imagery, define study areas, and manage geospatial data  
-🤖 **AI Integration** — Register models, run inference, review predictions as map annotations  
-📍 **Annotation Tools** — Schema-driven labeling, multi-user review, version history  
-⚙️ **Visual Automation** — Drag-and-drop pipeline builder for repeatable monitoring tasks  
-🔄 **Job Monitoring** — Async processing with live progress tracking  
-🏢 **Multi-Tenant** — Organization-based access, role-based permissions via Clerk  
+  ---
 
+  <p align="center">
+    Discover satellite imagery, run AI models, review annotations, and automate monitoring workflows on an interactive map workspace.
+  </p>
+
+</div>
+
+## 🌟 Features
+
+* 🗺️ **Map-Centric Workspace** — Explore imagery, define study areas, and manage geospatial data.
+* 🤖 **AI Integration** — Register models, run inference, and review predictions as map annotations.
+* 📍 **Annotation Tools** — Schema-driven labeling, multi-user review workflows, and version history.
+* ⚙️ **Visual Automation** — Drag-and-drop pipeline builder for building repeatable monitoring tasks.
+* 🔄 **Job Monitoring** — Asynchronous backend processing coupled with live progress tracking.
+* 🏢 **Multi-Tenant Architecture** — Organization-based access and granular role-based permissions via Clerk.
+
+---
 
 ## Quick Start
 
