@@ -48,6 +48,8 @@ import {
   Code2,
   Shapes,
   Grid2x2,
+  FileCog,
+  ScanSearch,
   Ruler,
   type LucideIcon,
 } from 'lucide-react';
@@ -121,6 +123,8 @@ const NODE_ICONS: Record<string, LucideIcon> = {
   status_transition: ToggleLeft,
   vectorize_raster_mask: Shapes,
   rasterize_annotation_set: Grid2x2,
+  convert_to_cog: FileCog,
+  extract_raster_features: ScanSearch,
   // Quality / IoU
   raster_mask_metrics: Ruler,
   // Advanced
@@ -322,6 +326,7 @@ function EntityPicker({
   parentConfig,
   onMenuOpenChange,
   accent = '#7f5539',
+  single = false,
 }: {
   pickerType: string;
   label: string;
@@ -331,6 +336,8 @@ function EntityPicker({
   onMenuOpenChange?: (open: boolean) => void;
   /** Node category color — used to tint in-node buttons/controls. */
   accent?: string;
+  /** Force a single-value dropdown for a multi picker (string-typed field). */
+  single?: boolean;
 }) {
   const { projectId } = usePipelineContext();
   const cfg = PICKER_CONFIG[pickerType];
@@ -378,7 +385,7 @@ function EntityPicker({
     );
   }
 
-  if (cfg.multi) {
+  if (cfg.multi && !single) {
     return (
       <MultiEntityPicker
         label={label}
@@ -808,6 +815,7 @@ function InlineField({
         parentConfig={parentConfig}
         onMenuOpenChange={onMenuOpenChange}
         accent={accent}
+        single={type === 'string'}
       />
     );
   }
