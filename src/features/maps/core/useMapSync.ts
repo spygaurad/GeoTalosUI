@@ -82,9 +82,11 @@ export function useMapSync(): void {
           if (curr.visible !== old.visible) mm.setLayerVisible(id, curr.visible);
           if (curr.opacity !== old.opacity) mm.setLayerOpacity(id, curr.opacity);
           if (curr.style !== old.style) mm.setLayerStyle(id, curr.style, curr);
-          if (curr.annotationFilter !== old.annotationFilter) {
-            // MVT layers capture their config in a style closure at creation,
-            // so they must be rebuilt; GeoJSON layers can be restyled in place.
+          if (curr.annotationFilter !== old.annotationFilter
+              || (curr.tileFormat === 'mvt' && curr.classStyles !== old.classStyles)) {
+            // MVT layers capture their config (filter, class colors) in a style
+            // closure at creation, so they must be rebuilt; GeoJSON layers can
+            // be restyled in place.
             if (curr.tileFormat === 'mvt') {
               mm.removeLayer(id);
               mm.addLayer(curr);
@@ -105,6 +107,9 @@ export function useMapSync(): void {
               } else {
                 mm.setTileLayerUrl(id, curr.tileUrl);
               }
+            } else if (curr.tileFormat === 'mvt' && mm.hasLayer(id) && curr.tileUrl) {
+              // Annotation MVT: a new ?v= after an edit — reload tiles in place.
+              mm.setTileLayerUrl(id, curr.tileUrl);
             } else {
               mm.rebuildTileLayer(id, curr);
             }

@@ -345,6 +345,10 @@ export const EP = {
     delete: (id: string) => `basemaps/${id}`,
   },
 
+  referenceLayers: {
+    list: 'reference-layers',
+  },
+
   bookmarks: {
     list: 'bookmarks',
     create: 'bookmarks',
