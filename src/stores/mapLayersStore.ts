@@ -158,6 +158,8 @@ interface MapLayersState {
 
   refreshAnnotationSetId: string | null;
   requestAnnotationSetRefresh: (setId: string) => void;
+  /** Re-read the set's tile_version and point its MVT layer at the new tiles. */
+  refreshAnnotationSetTiles: (setId: string) => Promise<void>;
   clearAnnotationSetRefresh: () => void;
 
   toggleMeasurement: () => void;
@@ -400,6 +402,16 @@ export const useMapLayersStore = create<MapLayersState>()(
     },
 
     requestAnnotationSetRefresh: (setId: string) => set({ refreshAnnotationSetId: setId }),
+    refreshAnnotationSetTiles: async (setId: string) => {
+      const id = `annset-${setId}`;
+      const layer = get().layers[id];
+      if (!layer || layer.isRasterMask) return;
+      const annotationSet = await annotationSetsApi.get(setId);
+      const tileUrl = annotationSetsApi.getTileUrlTemplate(setId, annotationSet.tile_version);
+      set((s) => (s.layers[id]
+        ? { layers: { ...s.layers, [id]: { ...s.layers[id], tileUrl, tileFormat: 'mvt' as const, mvtLayerName: 'annotation_set_mvt' } } }
+        : s));
+    },
     clearAnnotationSetRefresh: () => set({ refreshAnnotationSetId: null }),
 
     setBackendLayerId: (datasetId, layerId) =>

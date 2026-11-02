@@ -64,7 +64,6 @@ export function useMultipartUpload() {
 
   // Job polling — only active when phase is 'ingesting'
   const jobId = upload?.jobId ?? null;
-  const isIngesting = upload?.phase === 'ingesting';
 
   useQuery({
     queryKey: qk.jobs.detail(jobId ?? ''),
@@ -177,7 +176,7 @@ export function useMultipartUpload() {
   );
 
   const start = useCallback(
-    async ({ file, name, datasetType, tags = [] }: StartUploadOptions) => {
+    async ({ file, name, datasetType }: StartUploadOptions) => {
       abortControllerRef.current = new AbortController();
       speedSamplesRef.current = [];
       partBytesRef.current = new Map();

@@ -22,15 +22,6 @@ import { useUploadStore } from '@/stores/uploadStore';
 import type { UploadPhase } from '@/stores/uploadStore';
 import { SegmentationClassMapper } from './SegmentationClassMapper';
 
-const ACCEPTED_TYPES = [
-  'image/tiff',
-  'image/geotiff',
-  'application/geo+json',
-  'application/json',
-  'application/zip',
-  'application/octet-stream',
-];
-
 const ACCEPTED_EXTENSIONS = ['.tif', '.tiff', '.geotiff', '.geojson', '.json', '.zip'];
 
 
@@ -241,7 +232,6 @@ export function UploadWizard({ onAddToMap, onViewDataset }: UploadWizardProps) {
 
   const phase: UploadPhase = upload?.phase ?? 'idle';
   const progress = upload?.progress;
-  const isActive = phase !== 'idle' && phase !== 'ready' && phase !== 'failed' && phase !== 'aborted';
 
   // Ingestion step animation — advance through steps based on time elapsed
   const [ingestStep, setIngestStep] = useState(0);

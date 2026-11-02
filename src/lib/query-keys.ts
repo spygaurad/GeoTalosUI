@@ -101,6 +101,10 @@ export const qk = {
     bookmarks: (params?: Record<string, unknown>) => ['bookmarks', params] as const,
   },
 
+  referenceLayers: {
+    list: () => ['reference-layers'] as const,
+  },
+
   stac: {
     collections: () => ['stac-collections'] as const,
     search: (params: Record<string, unknown>) => ['stac-search', params] as const,

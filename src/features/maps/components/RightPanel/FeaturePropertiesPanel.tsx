@@ -303,17 +303,15 @@ export function FeaturePropertiesPanel({ feature, mapId }: FeaturePropertiesPane
     setVerifying(true);
     try {
       const { annotationSetsApi } = await import('@/lib/api/annotation-sets');
-      const { getMapManager } = await import('@/features/maps/MapManager');
       const res = await annotationSetsApi.verifyFeature(annotationSetId, annotationId, mapId);
       const store = useMapLayersStore.getState();
-      const mm = getMapManager();
       const verifiedLayerId = `annset-${res.verified_set_id}`;
       // 1. Source: drop the moved point from its original (model/raw) layer.
       //    Uses the single-slot store refresh — kept as the ONLY such call so it
       //    can't be clobbered by a second refresh in the same tick.
       store.requestAnnotationSetRefresh(res.source_set_id);
       // 2. Verified: ensure the layer exists (new sets are added + auto-fetched
-      //    by the sync effect); refresh existing ones directly via the manager.
+      //    by the sync effect); reload existing ones' tiles at the new version.
       if (!store.layers[verifiedLayerId]) {
         let name = 'Verified annotations';
         try {
@@ -323,8 +321,7 @@ export function FeaturePropertiesPanel({ feature, mapId }: FeaturePropertiesPane
         store.addAnnotationSetLayer({ setId: res.verified_set_id, name });
       } else {
         try {
-          const fc = await annotationSetsApi.getFeatures(res.verified_set_id);
-          mm.setLayerData(verifiedLayerId, fc);
+          await store.refreshAnnotationSetTiles(res.verified_set_id);
         } catch { /* layer may have been removed */ }
       }
       queryClient.invalidateQueries({ queryKey: qk.maps.detail(mapId) });

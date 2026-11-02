@@ -4,6 +4,7 @@ import { useState, useCallback, useMemo, useEffect } from 'react';
 import { useQueryClient, useQuery } from '@tanstack/react-query';
 import { Layers, ChevronLeft, ChevronRight, ChevronDown, Plus } from 'lucide-react';
 import { AnnotationSetPicker } from './AnnotationSetPicker';
+import { ReferenceLayersSection } from './ReferenceLayersSection';
 import type { AnnotationSet as ApiAnnotationSet, AnnotationClass } from '@/types/api';
 import {
   DndContext,
@@ -799,6 +800,8 @@ export function LeftPanel({
                 </div>
               </div>
             )}
+
+            <ReferenceLayersSection />
           </>
         )}
 

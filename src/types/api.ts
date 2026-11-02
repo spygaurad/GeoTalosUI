@@ -272,6 +272,9 @@ export interface AnnotationSet {
   job_id: string | null;
   source_type?: AnnotationSetSourceType;
   review_status?: AnnotationReviewStatus;
+  /** Advances on every annotation write; appended to MVT tile URLs so edits
+   *  load fresh tiles. */
+  tile_version?: number;
   /** [minx, miny, maxx, maxy] envelope over live annotations; null when empty.
    *  Maintained by a DB trigger — used for AOI auto-nesting and fly-to. */
   extent_4326?: [number, number, number, number] | null;
