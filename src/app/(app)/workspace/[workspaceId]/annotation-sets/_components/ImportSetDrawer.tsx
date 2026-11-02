@@ -18,6 +18,55 @@ const BROWN = '#8c6d2c';
 const BROWN_HOVER = '#7e6228';
 const CLASS_PROPERTY = 'class_id';
 
+// Header names auto-detected for CSV geometry (mirrors the backend defaults).
+const WKT_CANDIDATES = ['geometry_wkt', 'wkt', 'geometry', 'geom'];
+const LON_CANDIDATES = ['longitude', 'lon', 'lng', 'long', 'x'];
+const LAT_CANDIDATES = ['latitude', 'lat', 'y'];
+
+function parseCsvHeader(text: string): string[] {
+  const line = text.replace(/^\uFEFF/, '').split(/\r?\n/, 1)[0] ?? '';
+  const cells: string[] = [];
+  let cur = '';
+  let quoted = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (quoted) {
+      if (ch === '"' && line[i + 1] === '"') {
+        cur += '"';
+        i++;
+      } else if (ch === '"') {
+        quoted = false;
+      } else {
+        cur += ch;
+      }
+    } else if (ch === '"') {
+      quoted = true;
+    } else if (ch === ',') {
+      cells.push(cur);
+      cur = '';
+    } else {
+      cur += ch;
+    }
+  }
+  cells.push(cur);
+  return cells.map((c) => c.trim()).filter(Boolean);
+}
+
+function pickColumn(header: string[], candidates: string[]): string {
+  const byLower = new Map(header.map((h) => [h.toLowerCase(), h]));
+  for (const c of candidates) {
+    const hit = byLower.get(c);
+    if (hit) return hit;
+  }
+  return '';
+}
+
+interface CsvFile {
+  text: string;
+  header: string[];
+  rows: number;
+}
+
 interface Props {
   open: boolean;
   onClose: () => void;
@@ -37,6 +86,10 @@ export function ImportSetDrawer({ open, onClose, onCreated }: Props) {
   const [file, setFile] = useState<File | null>(null);
   const [parsed, setParsed] = useState<GeoJSONFeatureCollection | null>(null);
   const [parseError, setParseError] = useState<string | null>(null);
+  const [csv, setCsv] = useState<CsvFile | null>(null);
+  const [wktColumn, setWktColumn] = useState('');
+  const [lonColumn, setLonColumn] = useState('');
+  const [latColumn, setLatColumn] = useState('');
 
   const schemasQ = useQuery({
     queryKey: qk.annotationSchemas.list(),
@@ -70,7 +123,32 @@ export function ImportSetDrawer({ open, onClose, onCreated }: Props) {
     setFile(f);
     setParsed(null);
     setParseError(null);
+    setCsv(null);
     if (!f) return;
+    if (f.name.toLowerCase().endsWith('.csv')) {
+      const csvReader = new FileReader();
+      csvReader.onload = () => {
+        const text = String(csvReader.result ?? '');
+        const header = parseCsvHeader(text);
+        if (header.length === 0) {
+          setParseError('CSV has no header row');
+          return;
+        }
+        const wkt = pickColumn(header, WKT_CANDIDATES);
+        const lon = pickColumn(header, LON_CANDIDATES);
+        const lat = pickColumn(header, LAT_CANDIDATES);
+        if (!wkt && !(lon && lat)) {
+          setParseError('CSV needs a WKT column (e.g. geometry_wkt) or longitude and latitude columns');
+        }
+        setWktColumn(wkt);
+        setLonColumn(wkt ? '' : lon);
+        setLatColumn(wkt ? '' : lat);
+        const rows = text.split(/\r?\n/).filter((l) => l.trim()).length - 1;
+        setCsv({ text, header, rows: Math.max(rows, 0) });
+      };
+      csvReader.readAsText(f);
+      return;
+    }
     const reader = new FileReader();
     reader.onload = () => {
       try {
@@ -120,13 +198,19 @@ export function ImportSetDrawer({ open, onClose, onCreated }: Props) {
     setFile(null);
     setParsed(null);
     setParseError(null);
+    setCsv(null);
+    setWktColumn('');
+    setLonColumn('');
+    setLatColumn('');
   };
+
+  const csvGeometryReady = !!csv && (!!wktColumn || (!!lonColumn && !!latColumn));
 
   const createAndImport = useMutation({
     mutationFn: async () => {
       if (!schemaId) throw new Error('Select a schema');
       if (!setName.trim()) throw new Error('Enter a name');
-      if (!parsed) throw new Error('Upload a GeoJSON file');
+      if (!parsed && !csvGeometryReady) throw new Error('Upload a GeoJSON or CSV file');
       const created = await annotationSetsApi.createStandalone({
         name: setName.trim(),
         description: description.trim() || null,
@@ -134,7 +218,18 @@ export function ImportSetDrawer({ open, onClose, onCreated }: Props) {
         dataset_id: datasetId || null,
         stac_item_id: itemId || null,
       });
-      const fc = mappedPreview?.fc ?? parsed;
+      if (csv) {
+        // Classes are matched server-side from a class_id or class_name column.
+        const res = await annotationSetsApi.importCSV(created.id, {
+          csv_text: csv.text,
+          filename: file?.name,
+          wkt_column: wktColumn || null,
+          lon_column: wktColumn ? null : lonColumn || null,
+          lat_column: wktColumn ? null : latColumn || null,
+        });
+        return { set: created, job: res };
+      }
+      const fc = mappedPreview?.fc ?? parsed!;
       const res = await annotationSetsApi.importGeoJSON(created.id, {
         geojson: fc,
         filename: file?.name,
@@ -170,7 +265,7 @@ export function ImportSetDrawer({ open, onClose, onCreated }: Props) {
           <div>
             <h2 className="text-lg font-bold text-[#2a251a]">New Annotation Set</h2>
             <p className="text-xs text-neutral-600 mt-0.5">
-              Each GeoJSON feature becomes one annotation in this set.
+              Each GeoJSON feature or CSV row becomes one annotation in this set.
             </p>
           </div>
           <button onClick={onClose} className="p-1 rounded hover:bg-neutral-100">
@@ -265,7 +360,7 @@ export function ImportSetDrawer({ open, onClose, onCreated }: Props) {
 
             <div>
               <label className="block text-xs font-semibold text-neutral-700 mb-1">
-                GeoJSON file <span className="text-red-500">*</span>
+                GeoJSON or CSV file <span className="text-red-500">*</span>
               </label>
               <label
                 className="flex items-center gap-2 border-2 border-dashed border-primary-100 rounded-md px-4 py-6 cursor-pointer hover:bg-primary-50"
@@ -273,16 +368,64 @@ export function ImportSetDrawer({ open, onClose, onCreated }: Props) {
               >
                 <FileJson size={18} />
                 <span className="text-sm">
-                  {file ? file.name : 'Click to select a .geojson file'}
+                  {file ? file.name : 'Click to select a .geojson or .csv file'}
                 </span>
                 <input
                   type="file"
-                  accept=".geojson,.json,application/geo+json,application/json"
+                  accept=".geojson,.json,.csv,application/geo+json,application/json,text/csv"
                   className="hidden"
                   onChange={(e) => onFileChange(e.target.files?.[0] ?? null)}
                 />
               </label>
               {parseError && <p className="text-xs text-red-600 mt-1">{parseError}</p>}
+              {csv && (
+                <div className="mt-2 space-y-2">
+                  <p className="text-xs text-neutral-600">{csv.rows} rows found</p>
+                  <div>
+                    <label className="block text-xs font-semibold text-neutral-700 mb-1">
+                      Geometry (WKT) column
+                    </label>
+                    <select
+                      value={wktColumn}
+                      onChange={(e) => setWktColumn(e.target.value)}
+                      className="w-full border border-neutral-300 rounded-md h-9 px-2 text-sm bg-white"
+                    >
+                      <option value="">— Use longitude / latitude columns —</option>
+                      {csv.header.map((h) => (
+                        <option key={h} value={h}>
+                          {h}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  {!wktColumn && (
+                    <div className="grid grid-cols-2 gap-3">
+                      {[
+                        { label: 'Longitude column', value: lonColumn, set: setLonColumn },
+                        { label: 'Latitude column', value: latColumn, set: setLatColumn },
+                      ].map((field) => (
+                        <div key={field.label}>
+                          <label className="block text-xs font-semibold text-neutral-700 mb-1">
+                            {field.label}
+                          </label>
+                          <select
+                            value={field.value}
+                            onChange={(e) => field.set(e.target.value)}
+                            className="w-full border border-neutral-300 rounded-md h-9 px-2 text-sm bg-white"
+                          >
+                            <option value="">— Select column —</option>
+                            {csv.header.map((h) => (
+                              <option key={h} value={h}>
+                                {h}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
               {parsed && (
                 <p className="text-xs text-neutral-600 mt-1">
                   {parsed.features.length} features parsed
@@ -303,7 +446,8 @@ export function ImportSetDrawer({ open, onClose, onCreated }: Props) {
           <aside className="rounded-lg border border-primary-100 bg-primary-50/50 p-4 h-fit">
             <h3 className="font-semibold text-sm text-[#2a251a] mb-1">Class IDs</h3>
             <p className="text-[11px] text-neutral-600 mb-3">
-              Copy these into your GeoJSON as <code>class_id</code> to bypass auto-mapping.
+              Copy these into your GeoJSON or CSV as <code>class_id</code> to bypass
+              auto-mapping. CSV rows can also use a <code>class_name</code> column.
             </p>
             {!schemaId ? (
               <p className="text-xs text-neutral-500">Select a schema to see classes.</p>
@@ -350,7 +494,7 @@ export function ImportSetDrawer({ open, onClose, onCreated }: Props) {
           </button>
           <button
             disabled={
-              createAndImport.isPending || !schemaId || !setName || !parsed
+              createAndImport.isPending || !schemaId || !setName || (!parsed && !csvGeometryReady)
             }
             onClick={() => createAndImport.mutate()}
             className="inline-flex items-center gap-2 rounded-md text-white text-sm font-semibold px-4 h-9 disabled:opacity-50"
