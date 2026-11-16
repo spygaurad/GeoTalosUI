@@ -15,13 +15,14 @@ import {
   Trash2,
   Layers,
   Download,
+  FileSpreadsheet,
 } from 'lucide-react';
 
 import { annotationSetsApi } from '@/lib/api/annotation-sets';
 import { datasetsApi } from '@/lib/api/datasets';
 import { jobsApi } from '@/lib/api/jobs';
 import { qk } from '@/lib/query-keys';
-import { downloadJSON } from '@/lib/download-utils';
+import { downloadBlob, downloadJSON } from '@/lib/download-utils';
 import { toast } from 'sonner';
 import { TablePagination } from '@/components/TablePagination';
 import type { AnnotationSet } from '@/types/api';
@@ -57,7 +58,7 @@ const FILTER_OPTIONS: { value: FilterStatus; label: string }[] = [
   { value: 'failed',  label: 'Failed' },
 ];
 
-const COLS = '1fr 180px 80px 120px 110px 40px 40px';
+const COLS = '1fr 180px 80px 120px 110px 64px 40px';
 
 // ── Status cell — polls job by id while running ───────────────────────────────
 function StatusCell({ jobId }: { jobId: string | null }) {
@@ -117,6 +118,7 @@ function StatusCell({ jobId }: { jobId: string | null }) {
 function SetRow({ set, datasetName, onDelete }: { set: AnnotationSet; datasetName?: string; onDelete: () => void }) {
   const [hovered, setHovered] = useState(false);
   const [exporting, setExporting] = useState(false);
+  const [exportingCsv, setExportingCsv] = useState(false);
 
   const handleExport = async (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -130,6 +132,28 @@ function SetRow({ set, datasetName, onDelete }: { set: AnnotationSet; datasetNam
       toast.error('Failed to export annotation set');
     } finally {
       setExporting(false);
+    }
+  };
+
+  const handleExportCsv = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setExportingCsv(true);
+    try {
+      const { download_url } = await annotationSetsApi.exportSet(set.id, 'csv');
+      const filename = `${set.name || 'annotation-set'}.csv`;
+      try {
+        const res = await fetch(download_url);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        downloadBlob(await res.blob(), filename);
+      } catch {
+        // Storage may not allow cross-origin reads; let the browser fetch it directly.
+        window.open(download_url, '_blank', 'noopener');
+      }
+      toast.success('Downloaded');
+    } catch {
+      toast.error('Failed to export annotation set as CSV');
+    } finally {
+      setExportingCsv(false);
     }
   };
 
@@ -209,6 +233,14 @@ function SetRow({ set, datasetName, onDelete }: { set: AnnotationSet; datasetNam
           title={exporting ? 'Exporting...' : 'Export as GeoJSON'}
         >
           {exporting ? <Loader2 size={14} style={{ animation: 'spin 1s linear infinite' }} /> : <Download size={14} />}
+        </button>
+        <button
+          onClick={handleExportCsv}
+          disabled={exportingCsv}
+          style={{ background: 'none', border: 'none', cursor: exportingCsv ? 'not-allowed' : 'pointer', color: C.textMuted, padding: 4, opacity: exportingCsv ? 0.5 : 1 }}
+          title={exportingCsv ? 'Exporting...' : 'Export as CSV'}
+        >
+          {exportingCsv ? <Loader2 size={14} style={{ animation: 'spin 1s linear infinite' }} /> : <FileSpreadsheet size={14} />}
         </button>
       </div>
 

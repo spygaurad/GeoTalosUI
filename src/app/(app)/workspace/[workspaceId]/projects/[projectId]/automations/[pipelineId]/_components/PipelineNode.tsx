@@ -50,6 +50,7 @@ import {
   Grid2x2,
   FileCog,
   ScanSearch,
+  Globe,
   Ruler,
   type LucideIcon,
 } from 'lucide-react';
@@ -125,6 +126,7 @@ const NODE_ICONS: Record<string, LucideIcon> = {
   rasterize_annotation_set: Grid2x2,
   convert_to_cog: FileCog,
   extract_raster_features: ScanSearch,
+  reproject_raster: Globe,
   // Quality / IoU
   raster_mask_metrics: Ruler,
   // Advanced

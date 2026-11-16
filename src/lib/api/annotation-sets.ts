@@ -132,6 +132,28 @@ export const annotationSetsApi = {
       .post(EP.annotationSets.import(setId), { json: data })
       .json<{ job_id: string; status: string }>(),
 
+  /** Import CSV rows (WKT or longitude/latitude columns) into a set. Returns 202 { job_id }. */
+  importCSV: (
+    setId: string,
+    data: {
+      csv_text: string;
+      filename?: string;
+      wkt_column?: string | null;
+      lon_column?: string | null;
+      lat_column?: string | null;
+      default_class_id?: string | null;
+    }
+  ) =>
+    apiClient
+      .post(EP.annotationSets.importCsv(setId), { json: data })
+      .json<{ job_id: string; status: string }>(),
+
+  /** Export a set to object storage; returns a presigned download URL. */
+  exportSet: (setId: string, format: 'geojson' | 'csv') =>
+    apiClient
+      .post(EP.annotationSets.export(setId), { json: { format } })
+      .json<{ download_url: string; filename: string; format: string }>(),
+
   /** Get all features in an annotation set as GeoJSON for direct download. */
   getAllFeatures: (setId: string) =>
     apiClient
