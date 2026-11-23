@@ -5,6 +5,7 @@ import { useQueryClient, useQuery } from '@tanstack/react-query';
 import { Layers, ChevronLeft, ChevronRight, ChevronDown, Plus } from 'lucide-react';
 import { AnnotationSetPicker } from './AnnotationSetPicker';
 import { ReferenceLayersSection, isReferenceLayerOn } from './ReferenceLayersSection';
+import { UploadedLayersSection } from './UploadedLayersSection';
 import { PROTECTED_AREA_LEGEND } from '../../referenceLayerStyles';
 import type { AnnotationSet as ApiAnnotationSet, AnnotationClass } from '@/types/api';
 import {
@@ -805,6 +806,7 @@ export function LeftPanel({
             )}
 
             <ReferenceLayersSection />
+            <UploadedLayersSection />
           </>
         )}
 

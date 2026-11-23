@@ -101,6 +101,10 @@ export const qk = {
     bookmarks: (params?: Record<string, unknown>) => ['bookmarks', params] as const,
   },
 
+  featureLayers: {
+    list: () => ['feature-layers', 'layers'] as const,
+  },
+
   referenceLayers: {
     list: () => ['reference-layers'] as const,
     styles: () => ['reference-layers', 'styles'] as const,

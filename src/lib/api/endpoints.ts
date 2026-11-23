@@ -346,6 +346,12 @@ export const EP = {
     delete: (id: string) => `basemaps/${id}`,
   },
 
+  featureLayers: {
+    layers: 'feature-layers/layers',
+    upload: 'feature-layers/upload',
+    layer: (name: string) => `feature-layers/layers/${encodeURIComponent(name)}`,
+  },
+
   referenceLayers: {
     list: 'reference-layers',
     styles: 'reference-layers/styles',

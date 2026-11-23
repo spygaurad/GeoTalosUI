@@ -35,7 +35,7 @@ export const PROTECTED_AREA_LEGEND = [
 ];
 
 function polygon(color: string, fillOpacity = 0.2): VectorStyle {
-  return { weight: 1, color, fill: true, fillColor: color, fillOpacity };
+  return { weight: 1, color, fill: true, fillColor: color, fillOpacity, radius: 4 };
 }
 
 /** The user's overrides (from the API); anything left out keeps the default look. */
