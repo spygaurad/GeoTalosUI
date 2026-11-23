@@ -77,7 +77,8 @@ export function ReferenceLayersSection() {
         opacity: style.opacity ?? 0.9,
         radius: style.heatmap?.radius ?? 18,
         weighted: !!style.heatmap?.weight,
-        boxes: { tileUrl: referenceLayersApi.tileUrlTemplate(ref), layerName: ref.name, style },
+        // Only the colour carries over: the opacity slider in heatmap mode is the heatmap's.
+        boxes: { tileUrl: referenceLayersApi.tileUrlTemplate(ref), layerName: ref.name, style: { colour: style.colour } },
       });
     }
     return getMapManager().createReferenceLayer({
