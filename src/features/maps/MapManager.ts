@@ -9,6 +9,7 @@
  */
 
 import { referenceLayerStyle } from './referenceLayerStyles';
+import { createHeatmapLayer } from './heatmapTileLayer';
 import type L from 'leaflet';
 import type { LayerConfig, LayerStyle } from './types';
 import type { Annotation, TrackedObject, Alert } from '@/types/api';
@@ -1094,6 +1095,8 @@ export class MapManager {
     attribution?: string | null;
     minZoom: number;
     maxNativeZoom: number;
+    /** The user's overrides: colour and opacity of the boxes. */
+    style?: { colour?: string; opacity?: number };
   }): L.Layer | null {
     const vectorGrid = this.loadVectorGrid();
     if (!vectorGrid) return null;
@@ -1103,10 +1106,26 @@ export class MapManager {
       minZoom: ref.minZoom,
       maxNativeZoom: ref.maxNativeZoom,
       attribution: ref.attribution ?? undefined,
-      vectorTileLayerStyles: { [ref.layerName]: referenceLayerStyle(ref.layerName) },
+      vectorTileLayerStyles: { [ref.layerName]: referenceLayerStyle(ref.layerName, ref.style) },
     }) as L.Layer;
     this.withTileAuth(vg);
     return vg;
+  }
+
+  /** Heatmap for a dense reference layer, from its point tileset. */
+  createReferenceHeatmap(ref: {
+    tileUrl: string;
+    layerName: string;
+    attribution?: string | null;
+    minZoom: number;
+    maxNativeZoom: number;
+    colour: string;
+    opacity: number;
+    radius: number;
+    weighted: boolean;
+  }): L.Layer | null {
+    if (!this.L) return null;
+    return createHeatmapLayer(this.L, { ...ref, getToken: getAuthToken });
   }
 
   /**

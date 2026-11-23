@@ -34,17 +34,28 @@ export const PROTECTED_AREA_LEGEND = [
   { label: 'Sustainable use', color: SUSTAINABLE_COLOR },
 ];
 
-function polygon(color: string): VectorStyle {
-  return { weight: 1, color, fill: true, fillColor: color, fillOpacity: 0.2 };
+function polygon(color: string, fillOpacity = 0.2): VectorStyle {
+  return { weight: 1, color, fill: true, fillColor: color, fillOpacity };
+}
+
+/** The user's overrides (from the API); anything left out keeps the default look. */
+export type StyleOverride = { colour?: string; opacity?: number };
+
+export function referenceLayerColour(name: string, override?: StyleOverride): string {
+  return override?.colour ?? REFERENCE_LAYER_COLORS[name] ?? DEFAULT_REFERENCE_LAYER_COLOR;
 }
 
 /** Style (or style function) for Leaflet.VectorGrid's vectorTileLayerStyles. */
-export function referenceLayerStyle(name: string): VectorStyle | ((p?: Record<string, unknown>) => VectorStyle) {
-  const color = REFERENCE_LAYER_COLORS[name] ?? DEFAULT_REFERENCE_LAYER_COLOR;
+export function referenceLayerStyle(
+  name: string,
+  override?: StyleOverride,
+): VectorStyle | ((p?: Record<string, unknown>) => VectorStyle) {
+  const color = referenceLayerColour(name, override);
   if (name === 'hydrorivers') return { weight: 1, color };
-  if (name === 'mrds') return { weight: 1, color, fill: true, fillColor: color, fillOpacity: 0.8, radius: 3 };
-  if (name === 'raisg_protected_areas') {
-    return (p) => polygon(STRICT.test(String(p?.categoria ?? '')) ? color : SUSTAINABLE_COLOR);
+  if (name === 'mrds') return { weight: 1, color, fill: true, fillColor: color, fillOpacity: override?.opacity ?? 0.8, radius: 3 };
+  // A chosen colour replaces the strict / sustainable split.
+  if (name === 'raisg_protected_areas' && !override?.colour) {
+    return (p) => polygon(STRICT.test(String(p?.categoria ?? '')) ? color : SUSTAINABLE_COLOR, override?.opacity);
   }
-  return polygon(color);
+  return polygon(color, override?.opacity);
 }

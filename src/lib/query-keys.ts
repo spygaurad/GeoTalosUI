@@ -103,6 +103,7 @@ export const qk = {
 
   referenceLayers: {
     list: () => ['reference-layers'] as const,
+    styles: () => ['reference-layers', 'styles'] as const,
   },
 
   stac: {

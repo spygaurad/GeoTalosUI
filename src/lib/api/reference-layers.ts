@@ -13,12 +13,43 @@ export interface ReferenceLayer {
   bounds: [number, number, number, number] | null;
   /** API-relative path with literal {z}/{x}/{y} placeholders. */
   tile_url: string;
+  geometry: 'polygon' | 'line' | 'point' | null;
+  /** What the tiles carry. A `weight` attribute can drive a heatmap. */
+  attributes: ReferenceLayerAttribute[];
+  /** One point per polygon, for the heatmap. Null when the layer has none (yet). */
+  density_tile_url: string | null;
 }
+
+export interface ReferenceLayerAttribute {
+  name: string;
+  label: string;
+  kind: 'text' | 'category' | 'number';
+  unit: string | null;
+  weight: boolean;
+}
+
+/** A user's overrides for one layer. Fields left out use the default look. */
+export interface ReferenceLayerStyle {
+  colour?: string;
+  opacity?: number;
+  mode?: 'boxes' | 'heatmap';
+  heatmap?: { radius?: number; weight?: string | null };
+}
+
+const absoluteTileUrl = (path: string) => `${API_BASE.replace(/\/api\/v1\/?$/, '')}${path}`;
 
 export const referenceLayersApi = {
   list: () => apiClient.get(EP.referenceLayers.list).json<{ items: ReferenceLayer[] }>(),
 
+  /** This organization's style overrides, by layer name. */
+  styles: () =>
+    apiClient.get(EP.referenceLayers.styles).json<{ items: Record<string, ReferenceLayerStyle> }>(),
+  setStyle: (name: string, style: ReferenceLayerStyle) =>
+    apiClient.put(EP.referenceLayers.style(name), { json: style }).json<{ layer: string; style: ReferenceLayerStyle }>(),
+  resetStyle: (name: string) => apiClient.delete(EP.referenceLayers.style(name)),
+
   /** Absolute tile URL template for Leaflet. tile_url already starts with /api/v1. */
-  tileUrlTemplate: (layer: ReferenceLayer) =>
-    `${API_BASE.replace(/\/api\/v1\/?$/, '')}${layer.tile_url}`,
+  tileUrlTemplate: (layer: ReferenceLayer) => absoluteTileUrl(layer.tile_url),
+  densityTileUrlTemplate: (layer: ReferenceLayer) =>
+    layer.density_tile_url ? absoluteTileUrl(layer.density_tile_url) : null,
 };

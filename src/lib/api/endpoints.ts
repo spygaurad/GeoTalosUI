@@ -348,6 +348,8 @@ export const EP = {
 
   referenceLayers: {
     list: 'reference-layers',
+    styles: 'reference-layers/styles',
+    style: (name: string) => `reference-layers/${name}/style`,
   },
 
   bookmarks: {
