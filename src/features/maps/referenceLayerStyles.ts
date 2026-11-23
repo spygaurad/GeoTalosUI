@@ -6,6 +6,7 @@
 
 type VectorStyle = {
   weight: number;
+  opacity?: number;
   color: string;
   fill?: boolean;
   fillColor?: string;
@@ -22,6 +23,7 @@ export const REFERENCE_LAYER_COLORS: Record<string, string> = {
   gfw_logging: '#854d0e',
   hydrorivers: '#0284c7',
   mrds: '#be185d',
+  osm_roads: '#525252',
 };
 export const DEFAULT_REFERENCE_LAYER_COLOR = '#0e7490';
 
@@ -52,6 +54,7 @@ export function referenceLayerStyle(
 ): VectorStyle | ((p?: Record<string, unknown>) => VectorStyle) {
   const color = referenceLayerColour(name, override);
   if (name === 'hydrorivers') return { weight: 1, color };
+  if (name === 'osm_roads') return { weight: 1.5, color, opacity: override?.opacity ?? 0.9 };
   if (name === 'mrds') return { weight: 1, color, fill: true, fillColor: color, fillOpacity: override?.opacity ?? 0.8, radius: 3 };
   // A chosen colour replaces the strict / sustainable split.
   if (name === 'raisg_protected_areas' && !override?.colour) {
