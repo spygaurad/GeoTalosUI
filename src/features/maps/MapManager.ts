@@ -9,7 +9,7 @@
  */
 
 import { referenceLayerStyle } from './referenceLayerStyles';
-import { createHeatmapLayer } from './heatmapTileLayer';
+import { createHeatmapLayer, HEATMAP_MAX_ZOOM } from './heatmapTileLayer';
 import type L from 'leaflet';
 import type { LayerConfig, LayerStyle } from './types';
 import type { Annotation, TrackedObject, Alert } from '@/types/api';
@@ -1112,7 +1112,11 @@ export class MapManager {
     return vg;
   }
 
-  /** Heatmap for a dense reference layer, from its point tileset. */
+  /**
+   * Heatmap for a dense reference layer, from its point tileset. Zoomed in past
+   * HEATMAP_MAX_ZOOM the polygons are far apart and a heatmap says little, so the real
+   * boxes take over from there.
+   */
   createReferenceHeatmap(ref: {
     tileUrl: string;
     layerName: string;
@@ -1123,9 +1127,19 @@ export class MapManager {
     opacity: number;
     radius: number;
     weighted: boolean;
+    /** The box layer shown when zoomed in. */
+    boxes: { tileUrl: string; layerName: string; style?: { colour?: string; opacity?: number } };
   }): L.Layer | null {
     if (!this.L) return null;
-    return createHeatmapLayer(this.L, { ...ref, getToken: getAuthToken });
+    const { boxes, ...heat } = ref;
+    const boxLayer = this.createReferenceLayer({
+      ...boxes,
+      attribution: null,
+      minZoom: HEATMAP_MAX_ZOOM + 1,
+      maxNativeZoom: ref.maxNativeZoom,
+    });
+    const heatLayer = createHeatmapLayer(this.L, { ...heat, maxZoom: HEATMAP_MAX_ZOOM, getToken: getAuthToken });
+    return this.L.layerGroup(boxLayer ? [heatLayer, boxLayer] : [heatLayer]);
   }
 
   /**

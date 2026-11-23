@@ -13,6 +13,8 @@ import Pbf from 'pbf';
 import { VectorTile } from 'vector-tile';
 
 const SIZE = 256;
+/** Last zoom drawn as a heatmap; the box layer takes over above it. */
+export const HEATMAP_MAX_ZOOM = 9;
 
 type Pt = { x: number; y: number; v: number; n: number }; // x, y in 0..1 of the tile; v summed weight, n cluster size
 type Opts = {
@@ -25,6 +27,8 @@ type Opts = {
   /** True when the style picked a weight attribute: use summed `w`, else the cluster size. */
   weighted: boolean;
   minZoom: number;
+  /** Hidden above this zoom (the boxes take over where polygons are far apart). */
+  maxZoom?: number;
   maxNativeZoom: number;
   attribution?: string | null;
   getToken: () => Promise<string | null | undefined>;
@@ -68,6 +72,9 @@ function hexToRgb(hex: string): [number, number, number] {
   return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
 }
 
+type Rgb = [number, number, number];
+const mix = (a: Rgb, b: Rgb, t: number): Rgb => [0, 1, 2].map((i) => Math.round(a[i] + (b[i] - a[i]) * t)) as Rgb;
+
 /** Soft blob sprite, drawn once per radius. */
 function blob(radius: number): HTMLCanvasElement {
   const c = document.createElement('canvas');
@@ -82,7 +89,9 @@ function blob(radius: number): HTMLCanvasElement {
 }
 
 export function createHeatmapLayer(Lf: typeof L, o: Opts): L.GridLayer {
-  const [r, g, b] = hexToRgb(o.colour);
+  const base = hexToRgb(o.colour);
+  const light = mix(base, [255, 255, 255], 0.65);
+  const dark = mix(base, [0, 0, 0], 0.45);
   const sprite = blob(o.radius);
   // Weight to 0..1: area in hectares is spread over orders of magnitude, so use a log scale.
   const ref = o.weighted ? 5000 : 30;
@@ -110,18 +119,20 @@ export function createHeatmapLayer(Lf: typeof L, o: Opts): L.GridLayer {
             const px = (p.x + dx) * SIZE;
             const py = (p.y + dy) * SIZE;
             if (px < -o.radius || py < -o.radius || px > SIZE + o.radius || py > SIZE + o.radius) continue;
-            ctx.globalAlpha = 0.1 + 0.4 * strength(p);
+            ctx.globalAlpha = 0.03 + 0.1 * strength(p);
             ctx.drawImage(sprite, px - o.radius, py - o.radius);
           }
         }
-        // Colour by how much the blobs piled up: transparent where empty, solid where dense.
+        // Colour by how much the blobs piled up: pale and see-through where thin, the chosen
+        // colour in the middle, darker where dense, so sparse and dense areas read apart.
         const img = ctx.getImageData(0, 0, SIZE, SIZE);
         const d = img.data;
         for (let i = 0; i < d.length; i += 4) {
-          const a = d[i + 3] / 255;
-          if (a === 0) continue;
-          d[i] = r; d[i + 1] = g; d[i + 2] = b;
-          d[i + 3] = Math.round(255 * Math.min(1, a ** 0.6) * o.opacity);
+          const t = Math.min(1, d[i + 3] / 255);
+          if (t === 0) continue;
+          const [cr, cg, cb] = t < 0.5 ? mix(light, base, t * 2) : mix(base, dark, (t - 0.5) * 2);
+          d[i] = cr; d[i + 1] = cg; d[i + 2] = cb;
+          d[i + 3] = Math.round(255 * (0.12 + 0.88 * t) * o.opacity);
         }
         ctx.putImageData(img, 0, 0);
         done(undefined, canvas);
@@ -134,6 +145,7 @@ export function createHeatmapLayer(Lf: typeof L, o: Opts): L.GridLayer {
     pane: 'awakeforest-data',
     tileSize: SIZE,
     minZoom: o.minZoom,
+    maxZoom: o.maxZoom,
     maxNativeZoom: o.maxNativeZoom,
     attribution: o.attribution ?? undefined,
   });
