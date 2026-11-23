@@ -8,6 +8,7 @@
  * - MapManager never triggers React re-renders — it only mutates Leaflet.
  */
 
+import { referenceLayerStyle } from './referenceLayerStyles';
 import type L from 'leaflet';
 import type { LayerConfig, LayerStyle } from './types';
 import type { Annotation, TrackedObject, Alert } from '@/types/api';
@@ -1096,14 +1097,13 @@ export class MapManager {
   }): L.Layer | null {
     const vectorGrid = this.loadVectorGrid();
     if (!vectorGrid) return null;
-    const style = { weight: 1, color: '#0e7490', fill: true, fillColor: '#22d3ee', fillOpacity: 0.25 };
     const vg = vectorGrid.protobuf(ref.tileUrl, {
       pane: 'awakeforest-data',
       interactive: false,
       minZoom: ref.minZoom,
       maxNativeZoom: ref.maxNativeZoom,
       attribution: ref.attribution ?? undefined,
-      vectorTileLayerStyles: { [ref.layerName]: style },
+      vectorTileLayerStyles: { [ref.layerName]: referenceLayerStyle(ref.layerName) },
     }) as L.Layer;
     this.withTileAuth(vg);
     return vg;
