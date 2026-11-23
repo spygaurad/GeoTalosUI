@@ -1057,15 +1057,17 @@ export class MapManager {
       }
     }
     // Removing a canvas layer can leave one queued redraw that runs after Leaflet dropped the
-    // canvas context, which throws "reading 'save'". Skip a clear when there is no context.
+    // canvas context, which throws "reading 'save'". Skip clear and draw when there is no context.
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const canvasProto = (L as any).Canvas?.prototype;
-    if (canvasProto && !canvasProto._guardedClear) {
-      const clear = canvasProto._clear;
-      canvasProto._clear = function (this: { _ctx?: unknown }) {
-        if (this._ctx) clear.call(this);
-      };
-      canvasProto._guardedClear = true;
+    if (canvasProto && !canvasProto._guardedRedraw) {
+      for (const name of ['_clear', '_draw'] as const) {
+        const original = canvasProto[name];
+        canvasProto[name] = function (this: { _ctx?: unknown }, ...args: unknown[]) {
+          if (this._ctx) return original.apply(this, args);
+        };
+      }
+      canvasProto._guardedRedraw = true;
     }
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const vectorGrid: any = (L as any).vectorGrid;

@@ -94,7 +94,7 @@ export function createHeatmapLayer(Lf: typeof L, o: Opts): L.GridLayer {
   const dark = mix(base, [0, 0, 0], 0.45);
   const sprite = blob(o.radius);
   // Weight to 0..1: area in hectares is spread over orders of magnitude, so use a log scale.
-  const ref = o.weighted ? 5000 : 30;
+  const ref = o.weighted ? 5000 : 8;
   const strength = (p: Pt) => Math.min(1, Math.log1p(o.weighted ? p.v : p.n) / Math.log1p(ref));
 
   const Layer = Lf.GridLayer.extend({
