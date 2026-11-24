@@ -1,6 +1,7 @@
 import { HTTPError } from 'ky';
 import { apiClient, API_BASE } from './client';
 import { EP } from './endpoints';
+import type { ReferenceLayerAttribute, ReferenceLayerStyle } from './reference-layers';
 
 /** A vector layer the organization uploaded (GeoJSON or CSV). */
 export interface UploadedLayer {
@@ -8,7 +9,10 @@ export interface UploadedLayer {
   feature_count: number;
   bounds: [number, number, number, number];
   geometry_types: string[];
-  attributes: string[];
+  /** Same shape as a reference layer's. Any all-number column can weight the heatmap. */
+  attributes: ReferenceLayerAttribute[];
+  /** Saved for the organization; fields left out use the default look. */
+  style: ReferenceLayerStyle;
   created_at: string;
   /** API-relative path with literal {z}/{x}/{y} placeholders. */
   tile_url: string;
@@ -57,7 +61,16 @@ export const featureLayersApi = {
 
   remove: (name: string) => apiClient.delete(EP.featureLayers.layer(name)),
 
+  setStyle: (name: string, style: ReferenceLayerStyle) =>
+    apiClient.put(EP.featureLayers.style(name), { json: style }).json<{ layer: string; style: ReferenceLayerStyle }>(),
+  resetStyle: (name: string) => apiClient.delete(EP.featureLayers.style(name)),
+
   /** Only the name is encoded: Leaflet must still see the literal {z}/{x}/{y}. */
   tileUrlTemplate: (layer: UploadedLayer) =>
     `${API_BASE}/feature-layers/layers/${encodeURIComponent(layer.name)}/tiles/{z}/{x}/{y}.pbf`,
+
+  /** One point per feature for the heatmap, with the weight attribute sent as `w`. */
+  pointsTileUrlTemplate: (layer: UploadedLayer, weight?: string | null) =>
+    `${API_BASE}/feature-layers/layers/${encodeURIComponent(layer.name)}/tiles/{z}/{x}/{y}.pbf?points=true` +
+    (weight ? `&weight=${encodeURIComponent(weight)}` : ''),
 };

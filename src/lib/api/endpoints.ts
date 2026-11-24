@@ -350,6 +350,7 @@ export const EP = {
     layers: 'feature-layers/layers',
     upload: 'feature-layers/upload',
     layer: (name: string) => `feature-layers/layers/${encodeURIComponent(name)}`,
+    style: (name: string) => `feature-layers/layers/${encodeURIComponent(name)}/style`,
   },
 
   referenceLayers: {
