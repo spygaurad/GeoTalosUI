@@ -4,7 +4,9 @@ import { useState, useCallback, useMemo, useEffect } from 'react';
 import { useQueryClient, useQuery } from '@tanstack/react-query';
 import { Layers, ChevronLeft, ChevronRight, ChevronDown, Plus } from 'lucide-react';
 import { AnnotationSetPicker } from './AnnotationSetPicker';
-import { ReferenceLayersSection } from './ReferenceLayersSection';
+import { ReferenceLayersSection, isReferenceLayerOn } from './ReferenceLayersSection';
+import { UploadedLayersSection } from './UploadedLayersSection';
+import { PROTECTED_AREA_LEGEND } from '../../referenceLayerStyles';
 import type { AnnotationSet as ApiAnnotationSet, AnnotationClass } from '@/types/api';
 import {
   DndContext,
@@ -321,12 +323,14 @@ export function LeftPanel({
     }
     return sections;
   }, [layers, annotationSetById, legendClassMeta]);
+  const protectedAreasOn = isReferenceLayerOn('raisg_protected_areas');
   const hasLegendItems =
     loadedAnnotationLegendSections.length > 0 ||
     Object.entries(annotationsByLabel).length > 0 ||
     datasets.length > 0 ||
     trackedObjects.length > 0 ||
-    alerts.length > 0;
+    alerts.length > 0 ||
+    protectedAreasOn;
 
   // ── Build a hierarchical layer list for the "all layers" view ──
   // - Item layers (item-*) are nested inside their parent dataset card, not shown top-level
@@ -802,6 +806,7 @@ export function LeftPanel({
             )}
 
             <ReferenceLayersSection />
+            <UploadedLayersSection />
           </>
         )}
 
@@ -962,6 +967,14 @@ export function LeftPanel({
             {alerts.length > 0 && (
               <LegendSection title="Alerts">
                 <LegendRow color={MC.danger} label="Active alerts" count={alerts.length} shape="circle" />
+              </LegendSection>
+            )}
+
+            {protectedAreasOn && (
+              <LegendSection title="Protected Areas">
+                {PROTECTED_AREA_LEGEND.map((item) => (
+                  <LegendRow key={item.label} color={item.color} label={item.label} shape="square" />
+                ))}
               </LegendSection>
             )}
 

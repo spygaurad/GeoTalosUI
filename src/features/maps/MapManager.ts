@@ -8,6 +8,8 @@
  * - MapManager never triggers React re-renders — it only mutates Leaflet.
  */
 
+import { referenceLayerStyle } from './referenceLayerStyles';
+import { createHeatmapLayer, HEATMAP_MAX_ZOOM } from './heatmapTileLayer';
 import type L from 'leaflet';
 import type { LayerConfig, LayerStyle } from './types';
 import type { Annotation, TrackedObject, Alert } from '@/types/api';
@@ -1054,6 +1056,19 @@ export class MapManager {
         return null;
       }
     }
+    // Removing a canvas layer can leave one queued redraw that runs after Leaflet dropped the
+    // canvas context, which throws "reading 'save'". Skip clear and draw when there is no context.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const canvasProto = (L as any).Canvas?.prototype;
+    if (canvasProto && !canvasProto._guardedRedraw) {
+      for (const name of ['_clear', '_draw'] as const) {
+        const original = canvasProto[name];
+        canvasProto[name] = function (this: { _ctx?: unknown }, ...args: unknown[]) {
+          if (this._ctx) return original.apply(this, args);
+        };
+      }
+      canvasProto._guardedRedraw = true;
+    }
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const vectorGrid: any = (L as any).vectorGrid;
     if (!vectorGrid?.protobuf) {
@@ -1093,20 +1108,57 @@ export class MapManager {
     attribution?: string | null;
     minZoom: number;
     maxNativeZoom: number;
+    /** The user's overrides: colour and opacity of the boxes. */
+    style?: { colour?: string; opacity?: number };
   }): L.Layer | null {
     const vectorGrid = this.loadVectorGrid();
     if (!vectorGrid) return null;
-    const style = { weight: 1, color: '#0e7490', fill: true, fillColor: '#22d3ee', fillOpacity: 0.25 };
     const vg = vectorGrid.protobuf(ref.tileUrl, {
       pane: 'awakeforest-data',
       interactive: false,
       minZoom: ref.minZoom,
       maxNativeZoom: ref.maxNativeZoom,
       attribution: ref.attribution ?? undefined,
-      vectorTileLayerStyles: { [ref.layerName]: style },
+      vectorTileLayerStyles: { [ref.layerName]: referenceLayerStyle(ref.layerName, ref.style) },
     }) as L.Layer;
     this.withTileAuth(vg);
     return vg;
+  }
+
+  /**
+   * Heatmap for a dense reference layer, from its point tileset. Zoomed in past
+   * HEATMAP_MAX_ZOOM the polygons are far apart and a heatmap says little, so the real
+   * boxes take over from there.
+   */
+  createReferenceHeatmap(ref: {
+    tileUrl: string;
+    layerName: string;
+    attribution?: string | null;
+    minZoom: number;
+    maxNativeZoom: number;
+    colour: string;
+    opacity: number;
+    radius: number;
+    weighted: boolean;
+    weightRef?: number;
+    countRef?: number;
+    /** The box layer shown when zoomed in. Without it the heatmap shows at every zoom. */
+    boxes?: { tileUrl: string; layerName: string; style?: { colour?: string; opacity?: number } };
+  }): L.Layer | null {
+    if (!this.L) return null;
+    const { boxes, ...heat } = ref;
+    const boxLayer = boxes && this.createReferenceLayer({
+      ...boxes,
+      attribution: null,
+      minZoom: HEATMAP_MAX_ZOOM + 1,
+      maxNativeZoom: ref.maxNativeZoom,
+    });
+    const heatLayer = createHeatmapLayer(this.L, {
+      ...heat,
+      maxZoom: boxes ? HEATMAP_MAX_ZOOM : undefined,
+      getToken: getAuthToken,
+    });
+    return this.L.layerGroup(boxLayer ? [heatLayer, boxLayer] : [heatLayer]);
   }
 
   /**
