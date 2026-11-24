@@ -16,6 +16,10 @@ export interface ReferenceLayer {
   geometry: 'polygon' | 'line' | 'point' | null;
   /** What the tiles carry. A `weight` attribute can drive a heatmap. */
   attributes: ReferenceLayerAttribute[];
+  /** Heatmap weight until the user picks one (null: count the features). */
+  default_weight?: string | null;
+  /** Features per heatmap cluster drawn at full strength when counting. Null: the default. */
+  count_max?: number | null;
   /** One point per polygon, for the heatmap. Null when the layer has none (yet). */
   density_tile_url: string | null;
 }
@@ -26,6 +30,8 @@ export interface ReferenceLayerAttribute {
   kind: 'text' | 'category' | 'number';
   unit: string | null;
   weight: boolean;
+  /** Weight drawn at full strength in the heatmap (log scale). Null: the default. */
+  max?: number | null;
 }
 
 /** A user's overrides for one layer. Fields left out use the default look. */

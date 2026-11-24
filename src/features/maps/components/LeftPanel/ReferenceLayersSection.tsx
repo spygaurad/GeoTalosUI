@@ -5,7 +5,12 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import type L from 'leaflet';
 import { qk } from '@/lib/query-keys';
-import { referenceLayersApi, type ReferenceLayer, type ReferenceLayerStyle } from '@/lib/api/reference-layers';
+import {
+  referenceLayersApi,
+  type ReferenceLayer,
+  type ReferenceLayerAttribute,
+  type ReferenceLayerStyle,
+} from '@/lib/api/reference-layers';
 import { getMapManager } from '../../MapManager';
 import { MC } from '../../mapColors';
 import { PROTECTED_AREA_LEGEND, referenceLayerColour } from '../../referenceLayerStyles';
@@ -69,14 +74,21 @@ export function ReferenceLayersSection() {
     };
     const density = referenceLayersApi.densityTileUrlTemplate(ref);
     if (style?.mode === 'heatmap' && density) {
+      // undefined: the user never picked, so use the layer's default; null: count features.
+      const weight = style.heatmap?.weight === undefined ? ref.default_weight : style.heatmap.weight;
       return getMapManager().createReferenceHeatmap({
         ...base,
+        // The point tiles start at zoom 0, so the heatmap shows zoomed out even where the
+        // boxes start later.
+        minZoom: 0,
         layerName: `${ref.name}_density`,
         tileUrl: density,
         colour: referenceLayerColour(ref.name, style),
         opacity: style.opacity ?? 0.9,
         radius: style.heatmap?.radius ?? 18,
-        weighted: !!style.heatmap?.weight,
+        weighted: !!weight,
+        weightRef: ref.attributes.find((a) => a.name === weight)?.max ?? undefined,
+        countRef: ref.count_max ?? undefined,
         // Only the colour carries over: the opacity slider in heatmap mode is the heatmap's.
         boxes: { tileUrl: referenceLayersApi.tileUrlTemplate(ref), layerName: ref.name, style: { colour: style.colour } },
       });
@@ -162,8 +174,9 @@ export function ReferenceLayersSection() {
       </div>
       {data.items.map((ref) => {
         const on = isReferenceLayerOn(ref.name);
-        const belowMinZoom = on && mapZoom !== undefined && mapZoom < ref.minzoom;
         const style = styles[ref.name];
+        const heatmapOn = style?.mode === 'heatmap' && !!ref.density_tile_url;
+        const belowMinZoom = on && !heatmapOn && mapZoom !== undefined && mapZoom < ref.minzoom;
         const colour = referenceLayerColour(ref.name, style);
         const customised = !!style && Object.keys(style).length > 0;
         const open = settingsFor === ref.name;
@@ -218,7 +231,9 @@ export function ReferenceLayersSection() {
           </label>
           {open && (
             <StyleControls
-              ref_={ref}
+              attributes={ref.attributes}
+              hasHeatmap={!!ref.density_tile_url}
+              defaultWeight={ref.default_weight ?? null}
               style={style}
               colour={colour}
               onChange={(next) => changeStyle(ref, next)}
@@ -235,8 +250,11 @@ export function ReferenceLayersSection() {
 const ROW = { display: 'flex', alignItems: 'center', gap: 8, fontSize: 11, color: MC.textSecondary } as const;
 
 /** Colour, opacity and, for layers with heatmap tiles, boxes or heatmap with radius and weight. */
-function StyleControls({ ref_, style, colour, onChange, onReset }: {
-  ref_: ReferenceLayer;
+export function StyleControls({ attributes, hasHeatmap, defaultWeight = null, countLabel = 'Number of areas', style, colour, onChange, onReset }: {
+  attributes: ReferenceLayerAttribute[];
+  hasHeatmap: boolean;
+  defaultWeight?: string | null;
+  countLabel?: string;
   style: ReferenceLayerStyle | undefined;
   colour: string;
   onChange: (next: ReferenceLayerStyle) => void;
@@ -244,7 +262,7 @@ function StyleControls({ ref_, style, colour, onChange, onReset }: {
 }) {
   const s = style ?? {};
   const heat = s.mode === 'heatmap';
-  const weights = ref_.attributes.filter((a) => a.weight);
+  const weights = attributes.filter((a) => a.weight);
   return (
     <div style={{ padding: '2px 12px 8px 34px', display: 'grid', gap: 6 }}>
       <label style={ROW}>
@@ -259,7 +277,7 @@ function StyleControls({ ref_, style, colour, onChange, onReset }: {
           onChange={(e) => onChange({ ...s, opacity: Number(e.target.value) })}
         />
       </label>
-      {ref_.density_tile_url && (
+      {hasHeatmap && (
         <>
           <label style={ROW}>
             <input
@@ -281,10 +299,10 @@ function StyleControls({ ref_, style, colour, onChange, onReset }: {
                 <label style={ROW}>
                   Weight
                   <select
-                    value={s.heatmap?.weight ?? ''}
+                    value={(s.heatmap?.weight === undefined ? defaultWeight : s.heatmap.weight) ?? ''}
                     onChange={(e) => onChange({ ...s, heatmap: { ...s.heatmap, weight: e.target.value || null } })}
                   >
-                    <option value="">Number of areas</option>
+                    <option value="">{countLabel}</option>
                     {weights.map((a) => <option key={a.name} value={a.name}>{a.label}{a.unit ? ` (${a.unit})` : ''}</option>)}
                   </select>
                 </label>

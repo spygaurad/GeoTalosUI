@@ -1140,18 +1140,24 @@ export class MapManager {
     opacity: number;
     radius: number;
     weighted: boolean;
-    /** The box layer shown when zoomed in. */
-    boxes: { tileUrl: string; layerName: string; style?: { colour?: string; opacity?: number } };
+    weightRef?: number;
+    countRef?: number;
+    /** The box layer shown when zoomed in. Without it the heatmap shows at every zoom. */
+    boxes?: { tileUrl: string; layerName: string; style?: { colour?: string; opacity?: number } };
   }): L.Layer | null {
     if (!this.L) return null;
     const { boxes, ...heat } = ref;
-    const boxLayer = this.createReferenceLayer({
+    const boxLayer = boxes && this.createReferenceLayer({
       ...boxes,
       attribution: null,
       minZoom: HEATMAP_MAX_ZOOM + 1,
       maxNativeZoom: ref.maxNativeZoom,
     });
-    const heatLayer = createHeatmapLayer(this.L, { ...heat, maxZoom: HEATMAP_MAX_ZOOM, getToken: getAuthToken });
+    const heatLayer = createHeatmapLayer(this.L, {
+      ...heat,
+      maxZoom: boxes ? HEATMAP_MAX_ZOOM : undefined,
+      getToken: getAuthToken,
+    });
     return this.L.layerGroup(boxLayer ? [heatLayer, boxLayer] : [heatLayer]);
   }
 

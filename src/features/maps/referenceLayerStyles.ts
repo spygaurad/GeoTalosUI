@@ -24,6 +24,9 @@ export const REFERENCE_LAYER_COLORS: Record<string, string> = {
   hydrorivers: '#0284c7',
   mrds: '#be185d',
   osm_roads: '#525252',
+  gadm: '#334155',
+  population: '#a21caf',
+  species: '#047857',
 };
 export const DEFAULT_REFERENCE_LAYER_COLOR = '#0e7490';
 
@@ -55,7 +58,9 @@ export function referenceLayerStyle(
   const color = referenceLayerColour(name, override);
   if (name === 'hydrorivers') return { weight: 1, color };
   if (name === 'osm_roads') return { weight: 1.5, color, opacity: override?.opacity ?? 0.9 };
-  if (name === 'mrds') return { weight: 1, color, fill: true, fillColor: color, fillOpacity: override?.opacity ?? 0.8, radius: 3 };
+  // Boundary lines, states drawn heavier than the units inside them.
+  if (name === 'gadm') return (p) => ({ weight: p?.level === 1 ? 1.6 : 0.6, color, opacity: override?.opacity ?? 0.8 });
+  if (name === 'mrds' || name === 'species') return { weight: 1, color, fill: true, fillColor: color, fillOpacity: override?.opacity ?? 0.8, radius: 3 };
   // A chosen colour replaces the strict / sustainable split.
   if (name === 'raisg_protected_areas' && !override?.colour) {
     return (p) => polygon(STRICT.test(String(p?.categoria ?? '')) ? color : SUSTAINABLE_COLOR, override?.opacity);

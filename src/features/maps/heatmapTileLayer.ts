@@ -26,6 +26,10 @@ type Opts = {
   radius: number;
   /** True when the style picked a weight attribute: use summed `w`, else the cluster size. */
   weighted: boolean;
+  /** Weight that counts as "full" (log scale). Default suits areas in hectares. */
+  weightRef?: number;
+  /** Cluster size that counts as "full" when not weighted. Default 8, set for the mining layers. */
+  countRef?: number;
   minZoom: number;
   /** Hidden above this zoom (the boxes take over where polygons are far apart). */
   maxZoom?: number;
@@ -52,6 +56,9 @@ async function loadPoints(url: string, layerName: string, getToken: Opts['getTok
         const f = layer.feature(i);
         const g = f.loadGeometry()[0]?.[0];
         if (!g) continue;
+        // Tippecanoe repeats points near the edge in the neighbour tile's buffer. The neighbours
+        // are drawn anyway, so keep only this tile's own points or edges count twice (seams).
+        if (g.x < 0 || g.y < 0 || g.x >= layer.extent || g.y >= layer.extent) continue;
         const props = f.properties as Record<string, number | undefined>;
         // `w` is the summed weight; point_count is only set on clusters. Both are kept so a
         // change of weight setting needs no refetch.
@@ -94,8 +101,13 @@ export function createHeatmapLayer(Lf: typeof L, o: Opts): L.GridLayer {
   const dark = mix(base, [0, 0, 0], 0.45);
   const sprite = blob(o.radius);
   // Weight to 0..1: area in hectares is spread over orders of magnitude, so use a log scale.
-  const ref = o.weighted ? 5000 : 8;
-  const strength = (p: Pt) => Math.min(1, Math.log1p(o.weighted ? p.v : p.n) / Math.log1p(ref));
+  // A layer that gives its own top value (population, uploads) gets a square root scale and no
+  // floor instead: dense point fields would otherwise pile the floor up into one flat colour.
+  const scaled = o.weighted && o.weightRef !== undefined;
+  const ref = o.weighted ? (o.weightRef ?? 5000) : (o.countRef ?? 8);
+  const strength = (p: Pt) =>
+    scaled ? Math.min(1, Math.sqrt(Math.max(0, p.v) / ref)) : Math.min(1, Math.log1p(o.weighted ? p.v : p.n) / Math.log1p(ref));
+  const floor = scaled ? 0 : 0.03;
 
   const Layer = Lf.GridLayer.extend({
     createTile(coords: L.Coords, done: L.DoneCallback) {
@@ -119,7 +131,7 @@ export function createHeatmapLayer(Lf: typeof L, o: Opts): L.GridLayer {
             const px = (p.x + dx) * SIZE;
             const py = (p.y + dy) * SIZE;
             if (px < -o.radius || py < -o.radius || px > SIZE + o.radius || py > SIZE + o.radius) continue;
-            ctx.globalAlpha = 0.03 + 0.1 * strength(p);
+            ctx.globalAlpha = floor + (scaled ? 0.2 : 0.1) * strength(p);
             ctx.drawImage(sprite, px - o.radius, py - o.radius);
           }
         }
